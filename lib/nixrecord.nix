@@ -3,7 +3,7 @@
 # — see README's "The catalogue" for the shape this file follows (same as nixsh's lib/tools.nix
 # and nixmedia's lib/media.nix) and the placement rule that decides what belongs here at all.
 #
-# Two groups today, each a direct application of that rule:
+# Three groups today, each a direct application of that rule:
 #
 #   capture — the engine and what it needs to see and hear real hardware: OBS itself, the V4L2
 #             userspace tooling, and the capture-chain filters OBS loads (noise suppression,
@@ -12,6 +12,10 @@
 #             actually calls. OBS's own websocket server ships in-tree (obs-websocket.so, part of
 #             the `obs-studio` entry below) — nothing here re-implements a control channel that
 #             already exists.
+#   edit    — kdenlive and shotcut, two faces of the shared MLT engine rather than competing
+#             alternatives: kdenlive for the involved stuff (multicam switching, mature proxy
+#             editing), shotcut for the quick stuff (maintained by MLT's own maintainer, its
+#             `.mlt` project file raw MLT XML). A project authored in one opens in the other.
 #
 # No `perform` group yet: README describes it (instruments whose output is a performance that
 # happened once), but nothing catalogued below belongs there — a group with no approved entry
@@ -78,6 +82,21 @@
       aur = true;
       nixpkgs = "deckmaster";
       note = "the Stream Deck daemon. Configuration is a file it reads at startup, not GUI state that would fight a `home-manager switch` for control of it — see README's 'Prefer a deck daemon whose entire configuration is a file it reads at startup.'";
+    };
+  };
+
+  # ── Edit: two faces of one shared engine, not competing alternatives ───────────────────────
+  edit = {
+    kdenlive = {
+      arch = "kdenlive";
+      nixpkgs = "kdePackages.kdenlive";
+      note = "for the involved stuff — multicam switching and mature proxy editing, which is what makes a 3–4 angle 4K30 project tractable on the one laptop this repo targets. NOT a bare `kdenlive` attribute in nixpkgs: it lives under `kdePackages`, forcing that path is what confirms it (a bare `pkgs.kdenlive` throws `attribute 'kdenlive' missing`). Shares the MLT engine with `shotcut` below, so a project file authored in one opens in the other — see that entry's note for why both are catalogued rather than one.";
+    };
+
+    shotcut = {
+      arch = "shotcut";
+      nixpkgs = "shotcut";
+      note = "for the quick stuff — maintained by MLT's own maintainer, and its `.mlt` project file is raw MLT XML, the same engine `kdenlive` above wraps. They are two faces of one engine rather than competing alternatives, which is why both are catalogued: a project started here opens there and back.";
     };
   };
 }
