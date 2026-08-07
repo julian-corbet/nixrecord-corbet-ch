@@ -29,20 +29,30 @@
       homeManagerModules = {
         nixrecord = nixrecordModule;
         default = nixrecordModule;
+        install = nixrecordModule;
       };
 
       # ── SYSTEM SIDE (NixOS) ──────────────────────────────────────────────────────────────────
       # Thin: installs pkgs.obs-studio. Config generation is the home-manager module above,
       # entirely separate — same split nixscroll draws between nixosModules.scroll and
       # homeManagerModules.scroll.
-      nixosModules.nixrecord = import ./modules/nixos.nix;
+      # `nixosModules.nixrecord` composes two independent concerns: modules/nixos.nix (installs
+      # `programs.nixrecord.package`, the config-generation module's own thin install path) and
+      # modules/nixos-catalogue.nix (the approved capture-set catalogue's NixOS backend, resolving
+      # `nixrecord.capture`/`.control` — see modules/catalogue.nix). Neither depends on the other;
+      # a host can compose this output and use either surface, both, or neither.
+      nixosModules.nixrecord = { imports = [ ./modules/nixos.nix ./modules/nixos-catalogue.nix ]; };
       nixosModules.default = self.nixosModules.nixrecord;
+      nixosModules.install = self.nixosModules.nixrecord;
 
       # ── ARCH/CACHYOS PLANE ───────────────────────────────────────────────────────────────────
       # Declares "obs-studio" into nixarch's `nixarch.packages.pacman` reconciler (official repo,
       # not AUR — see modules/system-manager.nix for how this was confirmed rather than assumed).
+      # That same module also imports modules/catalogue.nix for the approved capture-set catalogue
+      # (`nixrecord.capture`/`.control` → `archPackages`/`aurPackages`).
       systemManagerModules.nixrecord = ./modules/system-manager.nix;
       systemManagerModules.default = self.systemManagerModules.nixrecord;
+      systemManagerModules.install = self.systemManagerModules.nixrecord;
 
       # ── CHECKS ───────────────────────────────────────────────────────────────────────────────
       # `nix flake check` does not evaluate `homeManagerModules`/`systemManagerModules` — see

@@ -14,11 +14,19 @@
 # would still install it (paru/yay resolve repo packages too) but through the wrong reconciler
 # path — the one that needs a bootstrapped AUR helper and a non-root `aurUser` for a package that
 # never needed either, exactly the failure nixarch's own pacman/AUR split exists to avoid.
+#
+# Also imports ./catalogue.nix: the plain catalogue-selection surface (`nixrecord.capture`/
+# `.control`, resolved to `archPackages`/`aurPackages`) for the approved capture set — see that
+# module's own header for why it is a separate option shape from `nixrecord.install` below rather
+# than folded into it. Composing THIS module (`systemManagerModules.default`) is what a host needs
+# for either surface; there is no second module to import for the catalogue half.
 { lib, config, ... }:
 let
   cfg = config.nixrecord.install;
 in
 {
+  imports = [ ./catalogue.nix ];
+
   options.nixrecord.install = {
     enable = lib.mkEnableOption "installing OBS Studio on an Arch/CachyOS host via nixarch's package reconciler";
 
