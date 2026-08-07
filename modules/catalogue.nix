@@ -24,20 +24,22 @@ let
   selected = lib.flatten [
     (map (k: cat.capture.${k}) cfg.capture)
     (map (k: cat.control.${k}) cfg.control)
+    (map (k: cat.edit.${k}) cfg.edit)
   ];
 in
 {
   options.nixrecord = {
     capture = mkGroup "capture-engine and device tooling entries" cat.capture;
     control = mkGroup "control-surface entries" cat.control;
+    edit = mkGroup "edit entries (kdenlive, shotcut)" cat.edit;
 
     selected = lib.mkOption {
       type = lib.types.listOf lib.types.attrs;
       readOnly = true;
       internal = true;
       description = ''
-        The resolved catalogue entries for every name in `capture` and `control` combined, in one
-        flat list — the canonical "what did this host actually ask for" a platform backend
+        The resolved catalogue entries for every name in `capture`, `control` and `edit` combined,
+        in one flat list — the canonical "what did this host actually ask for" a platform backend
         consumes.
       '';
     };
@@ -58,8 +60,9 @@ in
       description = ''
         Selections that live in the AUR rather than an official repo, kept SEPARATE because
         `pacman -S` cannot resolve them — it fails the whole transaction with "target not found",
-        taking every other package in the same converge down with it. Three of today's six entries
-        (obs-cli, deckmaster, obs-pipewire-audio-capture) land here. Wire it regardless:
+        taking every other package in the same converge down with it. Three of today's eight
+        entries (obs-cli, deckmaster, obs-pipewire-audio-capture) land here; kdenlive and shotcut
+        do not — both are official-repo Arch packages. Wire it regardless:
 
           nixarch.packages.aur = config.nixrecord.aurPackages;
       '';
@@ -79,7 +82,7 @@ in
     unavailableOnNixos = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       readOnly = true;
-      description = "Selections with no nixpkgs equivalent, surfaced rather than silently dropped. Empty for today's six entries — every one resolves on both platforms.";
+      description = "Selections with no nixpkgs equivalent, surfaced rather than silently dropped. Empty for today's eight entries — every one resolves on both platforms.";
     };
   };
 

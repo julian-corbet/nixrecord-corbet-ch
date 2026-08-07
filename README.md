@@ -1,147 +1,312 @@
 # nixrecord
 
-Declarative screen/window/region recording via [OBS Studio](https://obsproject.com) — OBS as the
-encode engine, Nix as the interface. A user declares a recording INTENT (a named profile: canvas
-resolution, codec, bitrate, which sources go where); this repo renders the OBS files that intent
-actually needs — `~/.config/obs-studio/basic/profiles/<name>/{basic.ini,recordEncoder.json}` and
-`~/.config/obs-studio/basic/scenes/<name>.json` — the same way
-[nixscroll](https://github.com/julian-corbet/nixscroll-corbet-ch) renders a compositor config
-from structured options instead of hand-edited text.
+**Capturing the real world — light, sound, a thing that happened — and the encode policy for what
+you make of it.**
 
-Geared at a wlroots/Arch desktop — developed and ground-truthed against
-[nixarch](https://github.com/julian-corbet/nixarch-corbet-ch) and a real Intel Lunar Lake /
-Arc 140V laptop iGPU (see `studies/`) — but nothing in the mechanism assumes a specific machine.
+You go outside with a camera and a microphone, or you sit someone down for an interview, or you
+play a set. Something happens once, in front of hardware, and it has to end up as a file. This
+repo is the declarative half of that: [OBS Studio](https://obsproject.com) as the capture and
+composite engine, Nix as the interface. A user declares a recording INTENT — a named profile:
+canvas, codec, bitrate, which real inputs go where — and this repo renders the OBS files that
+intent actually needs (`~/.config/obs-studio/basic/profiles/<name>/{basic.ini,recordEncoder.json}`
+and `~/.config/obs-studio/basic/scenes/<name>.json`), the same way
+[nixscroll][nixscroll] renders a compositor config from structured options instead of hand-edited
+text.
+
+Alongside the generator, a small **catalogue** of what belongs installed on that same single
+host: the capture engine, the capture device's userspace tooling, the physical control surface,
+and the editor (`kdenlive`/`shotcut`) that turns a capture into a deliverable. See
+[The catalogue](#the-catalogue).
+
+## The placement rule
+
+Stated as a boundary rather than a list, so the next addition is decidable rather than argued:
+
+> **nixrecord captures the REAL world — light, sound, physical events. Capturing a digital
+> interface is owned by the repo that owns that interface.**
+
+"Record" is a verb, not a domain. Left undefined it swallows everything, because every subsystem
+on a machine can be recorded, and a repo that owned all of them would become a dependency of every
+one of those subsystems. That is the failure this rule prevents, and it is concrete:
+
+| What is being captured | Owner | Why not here |
+|---|---|---|
+| a terminal session (`asciinema`, `vhs`) | [nixsh][nixsh] | Terminal capture is a terminal concern. Every host has a console; pulling it here would make a capture repo a dependency of ordinary shell work on machines that have no camera, no microphone and no encoder. |
+| a desktop, a window, a game | the repo owning that display or remote-access surface — [nixremote][nixremote], [nixdesktop][nixdesktop], [nixscroll][nixscroll] | Screen capture needs a compositor, a portal and a session; it is a property of the display substrate, not of a camera. Filing it here would key a single-host repo to something every graphical host does. |
+| a camera, a microphone, a line input, a capture card | **here** | It needs physical hardware pointed at a physical event. |
+
+The payoff is what makes the rule worth having: **the real world needs a camera, a microphone and
+an encoder — and encoders are not uniform.** That single constraint decides the shape of this
+whole repo (next section), which is exactly what a boundary drawn on "record" as a verb could
+never have told you.
+
+### Two clauses that settle the recurring arguments
+
+**A capture device's userspace tooling follows the device, not the shell.** `v4l-utils` is a CLI,
+and [nixsh][nixsh]'s layer test ("does it default to a graphical window? no → nixsh") would
+therefore claim it. It should not: `v4l2-ctl` is the userspace half of a kernel subsystem — the
+same category as `alsa-utils` or `pciutils`, not the same category as `ripgrep`. nixsh's catalogue
+contains no hardware-enablement packages at all, and adding the first one has a real cost: a
+universal terminal catalogue would offer a camera-control tool to hosts with no camera, and the
+capture host's actual capability would stop being described in one place. Device tooling is keyed
+to the device; it lands wherever the device does.
+
+**A control surface belongs to the session it drives.** A Stream Deck is a physical instrument.
+What it drives here is a live capture, so what its buttons DO is declared here — see
+[Control surfaces](#control-surfaces-the-stream-deck). What it IS — a USB device that must appear
+at a stable node with usable permissions — is [nixusb][nixusb]'s, which owns USB device identity
+for the host. Two repos, two questions, no overlap.
+
+## Single-host by construction
+
+AV1 hardware encode is **generation-dependent, not vendor-dependent**, and the gap is not subtle:
+
+| Reference host | AV1 decode | AV1 encode |
+|---|---|---|
+| a nixarch laptop, Intel Arc iGPU (Lunar Lake) | yes | **yes** |
+| a nixarch workstation, Radeon RDNA2 | yes | **no — RDNA2 has no AV1 encoder at all; that arrived with RDNA3** |
+
+Both hosts *play* AV1 in hardware. Exactly one can *produce* it. That is why this repo composes
+onto one machine, and why AV1 delivery is pinned to it. Editing — `kdenlive`, `shotcut`, this
+repo's own `edit` catalogue group, see [The catalogue](#the-catalogue) — is catalogued on that
+SAME host: editing is ruled encoder-adjacent here, not encoder-agnostic, so "you can only cut on
+the laptop" is an accepted property of this repo rather than an argument against bundling the
+editor with the encoder.
+
+The workstation's GPU is also shared with other workloads on the same box, so it is not a
+scheduling-free encode target even for the codecs it *can* encode. The laptop's is not shared with
+anything.
+
+## Codec policy: capture in H.264, deliver in AV1
+
+This is a production principle, not a settings detail, and it is stated here because it is the one
+thing a capture repo can get wrong in a way no later step can repair.
+
+**Local capture is always H.264.**
+
+1. **It encodes acceptably on CPU.** That cannot be said of H.265 or AV1 at capture resolution and
+   framerate, in real time. This matters more than a benchmark suggests: a capture that misses
+   realtime does not run slower, it drops frames, and a dropped frame is unrecoverable. H.264 is
+   the only codec here that degrades to "software, on whatever machine you happen to be holding"
+   and still lands a usable file.
+2. **It is an excellent edit source.** Every NLE, every browser, every phone decodes it, in
+   hardware, everywhere.
+3. The module's default `codec = "software"` is `obs_x264` — software H.264. That default is the
+   policy's floor, deliberately, not a placeholder for a better one.
+
+**AV1 is a DELIVERY codec**, hardware-encoded, on the one host that can:
+
+4. **Realtime AV1 encode is a pixel-rate budget, not a stream count.**
+   `studies/av1-vaapi-pixel-budget.md` measures it on real hardware — roughly 1.05 gigapixels per
+   second, two independent ways, with realtime capacity planned at about 70% of that. Spending
+   that budget at *capture* time, where exceeding it costs frames, instead of at *export* time,
+   where exceeding it only costs minutes, is the wrong trade with nothing bought.
+5. **Delivery is where AV1 pays.** Both reference hosts decode it in hardware, so an AV1
+   deliverable plays everywhere while being produced in exactly one place.
+
+So the pipeline is: **capture H.264 → edit → deliver AV1.** Do not reach for AV1 as a capture
+format. `codec = "av1"` exists in the option surface for the case where the capture *is* the
+deliverable and there is no edit step at all; it is not the default and should not become one.
+
+The AV1 export itself is an NLE render preset — `kdenlive`/`shotcut`, this repo's own `edit`
+catalogue group, see [The catalogue](#the-catalogue) — or a transcoder job in
+[nixmedia][nixmedia]. nixrecord states the contract and does not ship a second transcoder to
+execute it — the same tool-versus-policy split [nixmedia][nixmedia]'s own placement rule already
+draws in the other direction ("a transcoder belongs there **as a tool**, never **as a policy**").
+
+## Composite once, encode once
+
+The single most important design constraint on any capture-source mechanism this module renders —
+stated here even while `sources`/`layout` are unimplemented (see
+[Sources](#sources-cameras-microphones-capture-cards) and [Status](#status)) because it is what
+decides the SHAPE that mechanism must have when it returns: **recording N inputs must mean N
+entries in ONE scene, composited onto ONE canvas, encoded by ONE `RecEncoder` — never N separate
+recording outputs.**
+
+The pixel-budget study above is why. A hardware encode ceiling expressed in pixels per second is
+not a session-count limit the way consumer NVENC's 3-session cap is: one encode at a given
+resolution×fps, or three concurrent encodes summing to the same pixel rate, measure the same
+aggregate throughput. Concurrency buys nothing and adds N-1 redundant copies of scene compositing
+and container muxing on top of an unchanged shared budget.
+
+A camera in the corner of a wide shot will be a scene item, not a second recording.
 
 ## The split
-
-Two pieces:
-
-**Config generation** (`homeManagerModules.nixrecord`, namespace `programs.nixrecord`) — a
-home-manager module that renders the three files above from `programs.nixrecord.profiles.<name>`.
-Installs nothing: it assumes an `obs` binary exists somewhere (installed by the NixOS module
-below, the Arch module, or by hand) and writes config for it.
-
-**System install** — `nixosModules.nixrecord` (installs `pkgs.obs-studio`) and
-`systemManagerModules.nixrecord` (declares `obs-studio` into
-[nixarch](https://github.com/julian-corbet/nixarch-corbet-ch)'s `nixarch.packages.pacman`
-reconciler — the *official*-repo list, not `.aur`; see `modules/system-manager.nix` for how that
-was confirmed rather than assumed).
-
-**No `packages` output.** Unlike nixscroll (which packages `scroll` itself because scroll has no
-home in nixpkgs), OBS Studio already lives in both nixpkgs (`pkgs.obs-studio`) and the Arch
-official repos. There is nothing here for a third packaging path to add.
 
 | Output | Class | Owns |
 |---|---|---|
 | `homeManagerModules.nixrecord` (`.default`) | home-manager | `~/.config/obs-studio/basic/{profiles,scenes}/*`, generated from `programs.nixrecord.*`. Installs nothing. |
-| `nixosModules.nixrecord` (`.default`) | NixOS | `environment.systemPackages` for `programs.nixrecord.package` (default `pkgs.obs-studio`) |
-| `systemManagerModules.nixrecord` (`.default`) | Arch/CachyOS | `nixarch.packages.pacman = [ "obs-studio" ... ]` |
+| `nixosModules.nixrecord` (`.default`) | NixOS | `environment.systemPackages` for the catalogue and `programs.nixrecord.package` (default `pkgs.obs-studio`). |
+| `systemManagerModules.nixrecord` (`.default`) | Arch/CachyOS | publishes into [nixarch][nixarch]'s `nixarch.packages.pacman` / `.aur` reconciler. Cannot install anything itself. |
 
-## One profile is one canvas is one encode
+**No `packages` output, deliberately.** Unlike [nixscroll][nixscroll] — which packages `scroll`
+itself because scroll has no home in nixpkgs — every entry in this catalogue already exists in
+nixpkgs, the Arch official repos, or the AUR. There is nothing here for a third packaging path to
+add.
 
-`programs.nixrecord.profiles.<name>` bundles four things that might look like independent axes
-but are deliberately NOT split apart: a canvas resolution+fps, a codec+bitrate+container, a set
-of named capture `sources`, and a `layout` placing each source on the canvas. One name renders
-one OBS profile (encode settings) and one identically-named OBS scene collection (the composite).
+## The catalogue
 
-This pairing is load-bearing, not cosmetic: a scene item's `pos`/`bounds` in OBS's own JSON are
-pixels in the currently-ACTIVE PROFILE's base canvas, not scene-collection-local coordinates.
-Decoupling "what resolution am I encoding at" from "where did I place this window on the canvas"
-would let the two silently drift — a scene collection built assuming a 4K canvas, loaded under a
-1080p profile, with every item's declared position now describing the wrong quarter of the
-frame. Keeping them 1:1 per named profile makes that drift structurally impossible instead of a
-discipline to remember.
+Same shape as [nixsh][nixsh]'s `lib/tools.nix` and [nixmedia][nixmedia]'s `lib/media.nix`: one
+entry per selectable package, each carrying its `arch` name, its `nixpkgs` attribute, and `aur`
+(default `false`) where the pacman name lives in the AUR rather than an official repo. That last
+field is load-bearing and not cosmetic: `pacman -S` fails the WHOLE transaction on an AUR name
+with "target not found", taking every other package in the same converge down with it.
 
-## Composite once, encode once
+Groups, each of which is a direct application of the placement rule:
 
-The single most important design principle in this repo, and the reason `layout` exists at all
-instead of a bare list of sources: **recording N sources means N entries in ONE scene, composited
-onto ONE canvas, encoded by ONE `RecEncoder` — never N separate recording outputs.**
+- **`capture`** — the engine and what it needs to see and hear real hardware: OBS itself, the V4L2
+  userspace tooling, and capture-chain filters that OBS loads.
+- **`control`** — physical control surfaces driving a live session, and the client a button press
+  actually calls.
+- **`edit`** — `kdenlive` and `shotcut`, two faces of the shared MLT engine rather than competing
+  alternatives (a project authored in one opens in the other): `kdenlive` for multicam switching
+  and mature proxy editing, `shotcut` for the quick stuff. Catalogued here, not in
+  [nixcreative][nixcreative], per the operator's ruling that video/audio editing is
+  encoder-adjacent — see [Single-host by construction](#single-host-by-construction) and
+  [What this repo does not own](#what-this-repo-does-not-own).
+- **`perform`** — instruments whose output is a performance that happened once and was recorded.
 
-This is not a stylistic preference. `studies/av1-vaapi-pixel-budget.md` measures why, on real
-hardware: AV1 VAAPI encode on an integrated GPU is a **pixel-rate ceiling** (~1.05 gigapixels/
-second, measured two independent ways), not a stream-count limit the way consumer NVENC's 3-session
-cap is. Running one encode at that resolution×fps or three concurrent encodes summing to the same
-total pixel rate measure the SAME aggregate throughput — concurrency buys nothing, it only adds
-N-1 redundant copies of scene-compositing and container-muxing overhead on top of an unchanged
-shared budget. `programs.nixrecord.profiles.<name>.sources`/`.layout` render that composite
-directly: there is no option surface anywhere in this module that could produce a second
-`RecEncoder` for the same profile.
+**ONE PACKAGE, ONE CATALOGUE.** Both this catalogue and its siblings feed the same
+`environment.systemPackages` on a NixOS host, so a package declared in two repos is a collision,
+not a redundancy. The placement rule decides which repo owns a package; it never licenses a copy
+in the other. Nothing catalogued in [nixcreative][nixcreative] (`qtractor`, `inkscape`, `krita`,
+`blender` — audio production and illustration/3D, not video editing), [nixmedia][nixmedia]
+(players, transcoders), [nixsh][nixsh] (`ffmpeg`, `yt-dlp`, `asciinema`, `vhs`) or
+[nixaudio][nixaudio] (the audio fabric) appears here under this repo's own reasoning. Video/audio
+editing (`kdenlive`, `shotcut`) is this repo's own `edit` group above, not nixcreative's.
 
-Realtime recording also needs headroom the study's raw numbers don't include on their own — see
-"Plan capacity at roughly 70% of the measured ceiling" in that same document. A dropped frame in
-a live capture is unrecoverable, unlike a batch encode that can simply run slower.
+## Sources: cameras, microphones, capture cards
 
-## Encoder selection: declared, never detected
+The real inputs this repo intends to composite, and what they would render to in OBS's own file
+format — the "Confirmed" column is deliberately honest about which of these have actually cleared
+this repo's own bar (a live OBS round-trip, not just a `strings` hit — see the discipline
+`home/nixrecord.nix`'s own header documents, and the `av1_vaapi` mistake that discipline exists
+because of):
 
-`programs.nixrecord.profiles.<name>.codec` is `av1` / `hevc` / `h264` / `software`
-(`obs_x264` — CPU, correct on any machine, and the module's default for exactly that reason, not
-as a recommendation to actually record on it). AV1/HEVC/H264 hardware encode is **generation-
-dependent, not just vendor-dependent**: AMD RDNA2 has AV1 *decode* but not *encode* — that arrived
-with RDNA3 — and Intel needs Arc/Xe or roughly an 11th-gen-Core-or-newer Quick Sync block for AV1
-encode specifically. This module cannot detect that for you: Nix evaluation happens wherever the
-flake is built, not necessarily on the machine the config will run on, so an eval-time hardware
-probe would as often as not answer for the wrong box — the same "declared, never detected"
-doctrine [nixarch](https://github.com/julian-corbet/nixarch-corbet-ch)'s own `packages.distro`
-option documents.
+| Source | OBS id | Confirmed |
+|---|---|---|
+| camera / webcam / HDMI-to-USB bridge | `pipewire-camera-source` (tentative) | found via `strings` only (Method 2, `studies/obs-config-ground-truth.md`) — the weakest of this repo's own confidence tiers, never round-tripped against a live OBS |
+| microphone / line in | `pulse_input_capture` | live round-trip (Method 1), `studies/obs-config-ground-truth.md` — already wired, see [Audio](#audio-pin-the-sink-never-follow-default) |
+| a monitored output (playback being captured back) | `pulse_output_capture` | as above — already wired |
+| SDI/HDMI capture card | DeckLink, via the `decklink.so` OBS ships | plugin observed loaded in a live OBS run; no source id or option surface confirmed |
 
-Get it wrong and OBS itself refuses to start the recording with a real, loud error. What this
-module adds is `fallbackCodecs` — a list that renders one COMPLETE sibling profile per entry
-(`<name>-fallback-<codec>`, identical in every other setting), so an alternative is a one-click
-profile switch away in OBS's own UI rather than something to hand-configure while a recording is
-already failing. OBS's file format has no config-level "try A, then B" primitive to render even
-if this module wanted one — this is the honest shape of what Nix actually can pre-build here.
+**`sources`/`layout` do not exist in the module today — removed, not merely narrowed.** Earlier
+code rendered `sources.<name>.type` as `output` / `window` / `region`, producing OBS's own
+`pipewire-screen-capture-source` / `pipewire-window-capture-source` — screen/window capture, which
+[the placement rule](#the-placement-rule) puts outside this repo, in
+[nixremote][nixremote]/[nixdesktop][nixdesktop]/[nixscroll][nixscroll]. Those three were the ONLY
+source types this module ever implemented, so removing them removed the entire `sources`/`layout`
+option surface, not one enum value among several: there is currently no way to declare ANY video
+capture source, and `programs.nixrecord.profiles.<name>` has no `sources`/`layout` option at all.
+A profile today renders only encode settings (`basic.ini`/`recordEncoder.json`) plus, if
+`audio.sink`/`.micSink` are set, an audio-only scene — see
+[Audio](#audio-pin-the-sink-never-follow-default).
+
+**What a consumer relying on the old behaviour needs to do.** Screen/window/region capture was
+never this repo's to keep; declare that capture in whichever repo owns the actual display surface
+([nixremote][nixremote]/[nixdesktop][nixdesktop]/[nixscroll][nixscroll]) instead. A camera,
+microphone-as-video-source, or capture-card source has no substitute here yet — that is
+[Status](#status) item 1, and the table above is why it is not a quick add: no id in it has
+cleared this repo's own confirmation bar the way every id currently in `home/nixrecord.nix` has.
+
+What Nix will be able to declare for a camera is smaller than it is for a screen, and worth noting
+for whenever this is built: a V4L2 device node is a path, not an interactive portal grant, so a
+camera source should be fully pre-declarable in a way a screen capture never was (the portal's
+ScreenCast flow needs a human to pick a target in a live dialog, and only a runtime-minted restore
+token skips it). The remaining care will be that the path stays stable across replug and reboot —
+which is precisely what [nixusb][nixusb] exists to guarantee, and why a raw `/dev/video0` should
+never appear in a declaration.
 
 ## Audio: pin the sink, never follow "default"
 
 `programs.nixrecord.audio.sink`/`.micSink` take an exact PipeWire/PulseAudio node name (`pactl
-list short sinks`), rendered as the literal `device_id` OBS's `pulse_output_capture`/
-`pulse_input_capture` sources use. Left `null` (the default for both), no audio source is
-rendered into the scene collection at all — no audio is preferable to silently wrong audio.
+list short sinks`), rendered as the literal `device_id` OBS's `pulse_output_capture` /
+`pulse_input_capture` sources use. Left `null` — the default for both — no audio source is
+rendered into the scene collection at all. No audio is preferable to silently wrong audio.
 
 **Do not reach for `followSystemDefault` without reading its own docstring first.** `device_id =
-"default"` means "whatever PipeWire's policy daemon currently calls the default sink" —
-re-evaluated on every device event, not fixed when a recording starts. That is a real, observed
-failure mode: a policy daemon re-elects the default sink whenever any device appears or
-disappears, and on a machine that also mirrors audio from another host over a network audio
-fabric (a sink that "appears" over the network rather than being plugged in locally), that
-re-election can silently point a live recording's captured audio at a sink physically producing
-sound on a DIFFERENT machine — with the level meters still moving, because something is still
-being captured, just not what was intended. This has actually happened, on a real streaming host
-in this project's own reference estate. Pinning the literal node name is the fix: PipeWire's
-re-election can change what "default" MEANS, never what a literal name resolves to.
+"default"` means "whatever the policy daemon currently calls the default sink", re-evaluated on
+every device event, not fixed when the recording starts. That is an observed failure, not a
+hypothetical: a policy daemon re-elects the default whenever any device appears or disappears, and
+on a host that also mirrors audio from another machine over a network audio fabric — where a sink
+"appears" over the network rather than being plugged in locally — that re-election can point a
+live recording at a sink physically producing sound on a different machine, with the level meters
+still moving, because something is still being captured. Just not what was intended.
 
-## What Nix can and can't declare about a capture source
+Pinning the literal node name is the fix: re-election can change what "default" MEANS, never what
+a literal name resolves to. On a host composing [nixaudio][nixaudio], the name to pin is the
+stable one that repo already declares.
 
-`programs.nixrecord.profiles.<name>.sources.<name>.type` is `output`, `window`, or `region` —
-rendering OBS's real `pipewire-screen-capture-source` / `pipewire-window-capture-source` source
-ids (zero-copy DMA-BUF capture, driven by OBS's own `linux-pipewire` plugin through the
-`org.freedesktop.portal.ScreenCast` desktop portal — confirmed against the installed plugin
-binary, see `studies/obs-config-ground-truth.md`).
+## Encoder selection: declared, never detected
 
-What this module CANNOT do, and does not pretend to: pre-select WHICH monitor or WHICH window.
-The portal's ScreenCast flow is deliberately interactive — a human picks the target in a live
-picker dialog the first time a source of this kind activates, and only a portal-issued restore
-token (opaque, minted at runtime, not something Nix can synthesize ahead of time) lets a later
-activation skip that picker. `region` mode is not a distinct portal capture type at all on any
-compositor this was checked against; it's rendered as an `output` capture plus a scene-item crop
-(`sources.<name>.region`), which IS something Nix can fully pre-declare, because it operates on
-pixels OBS already has rather than needing the portal to understand "just this rectangle".
+`profiles.<name>.codec` is `av1` / `hevc` / `h264` / `software` (`obs_x264`). This module cannot
+detect what the machine supports: Nix evaluation happens wherever the flake is built, not
+necessarily on the machine the config will run on, so an eval-time hardware probe would as often
+as not answer for the wrong box — the same "declared, never detected" doctrine
+[nixarch][nixarch]'s own `packages.distro` option documents. Get it wrong and OBS refuses to start
+the recording with a real, loud error.
 
-This is stated as a property of the underlying capture mechanism, not treated as a gap this
-module will close later — see `studies/obs-config-ground-truth.md`'s own closing section for what
-was and wasn't confirmed about it.
+What this module adds is `fallbackCodecs` — a list that renders one COMPLETE sibling profile per
+entry (`<name>-fallback-<codec>`, identical in every other setting), so an alternative is a
+one-click profile switch away in OBS's own UI rather than something to hand-configure while a
+recording is already failing. OBS's file format has no config-level "try A, then B" primitive to
+render even if this module wanted one; this is the honest shape of what Nix can pre-build.
+
+Given [the codec policy](#codec-policy-capture-in-h264-deliver-in-av1), the sane declaration for a
+capture profile is `codec = "h264"` with `fallbackCodecs = [ "software" ]` — hardware H.264 when
+the GPU is free, software H.264 when it is not, and the same file either way.
+
+## Control surfaces: the Stream Deck
+
+A deck is a grid of physical keys that starts a recording, cuts a scene, mutes a mic. Two facts
+shape how it is declared:
+
+**OBS's websocket server ships with OBS.** `obs-websocket.so` is present in the installed OBS's own
+plugin directory — a deck needs a *client*, not a plugin. What gets catalogued is the client and
+the deck daemon, never a re-implementation of a control channel that already exists.
+
+**Prefer a deck daemon whose entire configuration is a file it reads at startup.** That is exactly
+the shape this repo already renders for OBS, and it avoids the failure the next section names: a
+GUI that owns its own JSON state will fight a `home-manager switch` for control of it. A
+config-file daemon has no such state to fight over.
+
+The USB side is not this repo's. Permissions, stable naming, and the udev rule that makes the
+device reachable at all belong to [nixusb][nixusb].
+
+## Live performance
+
+A DJ set is in scope, and the placement rule is what puts it there rather than a taste call: the
+instrument is physical, the controllers are physical, the set happens once, and the artifact is a
+record of something that happened. Nothing is being captured off a digital interface. The mix's
+master output is a capture like any other, and it is composited and encoded under the same policy
+as a camera.
+
+What happens to that recording afterwards — cutting it — is this repo's own `edit` catalogue group
+(`kdenlive`/`shotcut`, see [The catalogue](#the-catalogue)). Mastering the audio itself is
+[nixcreative][nixcreative]'s `qtractor`.
+
+## What this repo does not own
+
+| Concern | Owner | The line |
+|---|---|---|
+| Transcoding a file you already have (`handbrake`) | [nixmedia][nixmedia] | You re-encode what you already have; nothing new entered the world. Its encode *policy* is this repo's; the tool is not. |
+| Playback (`vlc`, `mpv`) | [nixmedia][nixmedia] / [nixsh][nixsh] | Consumption. |
+| Audio routing, patchbays, mixers, per-app volume, stable device names | [nixaudio][nixaudio] | Routing is not capture. A patchbay edits the graph nixaudio declares; separating a graph from its editor helps nobody. |
+| The audio *transport* between hosts | [nixaudio][nixaudio] | A capture profile pins a node name; it never moves audio between machines. |
+| USB device identity, udev rules, stable device nodes | [nixusb][nixusb] | This repo says what a device is FOR; nixusb makes it reliably addressable. |
+| GPU driver stack, VAAPI userspace, card arbitration | [nixgpu][nixgpu] | A codec declaration assumes the driver exists; it does not install one. |
+| Terminal session recording (`asciinema`, `vhs`) | [nixsh][nixsh] | The placement rule, first row. |
+| Screen, window and game capture; streaming a session to another machine | [nixremote][nixremote], [nixdesktop][nixdesktop] / [nixscroll][nixscroll] | The placement rule, second row. |
 
 ## Not managed: global.ini / user.ini
 
-`global.ini` and `user.ini` hold OBS's own LAST-USED profile/scene-collection selection, dock
-layout, and window geometry — session state, not intent. This module never touches either file.
-Rendering a `Profile=`/`SceneCollection=` line into `global.ini` was considered and rejected: it
-would mean every manual profile switch in OBS's own UI (a one-off tweak, trying the fallback
-profile by hand) gets silently reverted on the next `home-manager switch` — the exact "Nix fights
-the running program for control of its own runtime state" footgun nixscroll's own `home/scroll.nix`
-avoids for the same reason (it writes `~/.config/scroll/config`, never scroll's own runtime IPC
-state). Activation — which profile/scene collection OBS opens by default — stays a manual choice.
+`global.ini` and `user.ini` hold OBS's LAST-USED profile and scene-collection selection, dock
+layout and window geometry — session state, not intent. This module never touches either.
+Rendering a `Profile=`/`SceneCollection=` line into `global.ini` was considered and rejected: every
+manual profile switch in OBS's own UI (trying the fallback profile by hand, mid-shoot) would be
+silently reverted on the next `home-manager switch` — the "Nix fights the running program for its
+own runtime state" footgun [nixscroll][nixscroll] avoids for the same reason. Which profile OBS
+opens with stays a manual choice.
 
 ## Usage
 
@@ -153,87 +318,106 @@ state). Activation — which profile/scene collection OBS opens by default — s
     enable = true;
 
     encoder.device = "/dev/dri/by-path/pci-0000:00:02.0-render"; # by-path, not renderD1XX — see option doc
-    audio.sink = "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"; # pactl list short sinks
+    audio.micSink  = "alsa_input.usb-XXXX_YYYY-00.analog-stereo"; # pactl list short sources
 
-    profiles.screencast = {
-      canvas = { width = 1920; height = 1080; };
-      fps = "60";
-      codec = "av1";
-      fallbackCodecs = [ "hevc" "software" ];
-      rateControl = "CBR";
-      bitrate = 16000;
-      sources.desktop = { type = "output"; };
-    };
-
-    profiles.demo-with-cam = {
+    # An interview's audio track. H.264 master, software fallback. No video capture source yet
+    # — see "Sources" above for why `sources`/`layout` (a camera in frame) isn't an option
+    # surface here today.
+    profiles.interview = {
       canvas = { width = 1920; height = 1080; };
       fps = "30";
-      codec = "hevc";
+      codec = "h264";
+      fallbackCodecs = [ "software" ];
       rateControl = "CBR";
       bitrate = 12000;
-      sources.desktop = { type = "output"; };
-      sources.webcam-window = { type = "window"; };
-      layout.webcam-window = { x = 1520; y = 780; width = 360; height = 270; };
     };
   };
 }
 ```
 
-Add the system side only if you want OBS installed by this repo rather than some other way:
+Add the system side only if you want the catalogue installed by this repo rather than some other
+way:
 
 ```nix
 { imports = [ inputs.nixrecord.nixosModules.nixrecord ]; programs.nixrecord.enable = true; }
 # or, on Arch via nixarch:
-{ imports = [ inputs.nixrecord.systemManagerModules.nixrecord ]; nixrecord.install.enable = true; }
+{
+  imports = [ inputs.nixrecord.systemManagerModules.nixrecord ];
+  nixarch.packages.pacman = config.nixrecord.archPackages;
+  nixarch.packages.aur    = config.nixrecord.aurPackages;
+}
 ```
 
 ## Mechanism public, values private
 
-Every id/key this module renders is either OBS's own real internal identifier (confirmed against
-the real binary — see `studies/obs-config-ground-truth.md`) or a neutral placeholder. No default
-here bakes in a specific machine's sink name, output name, GPU render-node path, or bitrate —
-`profiles` is `{}` by default, `audio.sink`/`micSink`/`encoder.device` are all `null`. A
-consumer's own hardware and hostnames go in their own config, never in this repo's defaults.
+Every id and key this module renders is either OBS's own real internal identifier — confirmed
+against a real installed binary, see `studies/obs-config-ground-truth.md` — or a neutral
+placeholder. No default bakes in a specific machine's sink name, device path, GPU render node or
+bitrate: `profiles` is `{}`, and `audio.sink`/`.micSink`/`encoder.device` are all `null`. A
+consumer's own hardware goes in their own config, never in this repo's defaults.
 
 ## No invented numbers
 
-`bitrate` has no default — the right value depends on resolution, codec, and content in a way no
-single number is correct across every profile a consumer might declare (see that option's own
-docstring for a starting-point range, explicitly labeled as a starting point, not a fact).
-`rateControl` stops at `CBR`/`VBR` rather than also offering `CQP`/`ICQ`, because the settings-dict
-key that would carry a CQP/ICQ quality VALUE did not come back confirmed against the real
-binary's own string table — left out rather than guessed. See
-`studies/obs-config-ground-truth.md`'s "What did NOT come back confirmed" for the full list.
+`bitrate` has no default — the right value depends on resolution, codec and content in a way no
+single number survives across every profile a consumer might declare (that option's docstring
+gives a starting-point range, labelled as a starting point, not a fact). `rateControl` stops at
+`CBR`/`VBR` rather than also offering `CQP`/`ICQ`, because the settings key that would carry a
+CQP/ICQ quality VALUE did not come back confirmed against the real binary's string table. Left out
+rather than guessed. See `studies/obs-config-ground-truth.md`'s "What did NOT come back confirmed".
 
 ## Status
 
-Pre-alpha scaffold. Verified so far: `home/nixrecord.nix`'s option tree evaluates cleanly
-(`lib.evalModules` against a home-manager stand-in, `checks/config-rendering.nix`) and renders
-the expected `basic.ini`/`recordEncoder.json`/scene-collection JSON for a representative set of
-options, including the `fallbackCodecs` sibling-profile expansion, the composite-once layout
-seam (a source with no `layout` entry fills the whole canvas; an explicit entry positions and
-sizes it; nothing renders a second `RecEncoder`), and the audio pinning-vs-`followSystemDefault`
-distinction. Every literal id/key the renderer emits was checked against a real, installed OBS
-Studio 32.1.2 — see `studies/obs-config-ground-truth.md` for the methodology and, importantly,
-what was checked and came back UNCONFIRMED (a CQP/ICQ quality key, a couple of enum-integer
-values inferred from string ordering rather than round-tripped).
+**Pre-alpha. The scope rule above is newer than the code in places, and the code is still catching
+up.**
 
-**Not yet verified**: an actual `home-manager switch` producing a profile+scene pair OBS opens
-and records from without complaint end to end (the closest proxy — hand-authoring a scene item
-and reloading it through the real binary — worked, and is exactly what
-`experiments/obs-headless-probe.sh` reproduces, but that is a narrower claim than "this exact
-generated file, loaded via OBS's normal Settings/scene-picker UI, records cleanly"). **Not yet
-attempted**: a `nix flake check`-sandboxed real-OBS acceptance check in the style of nixscroll's
-`checks/config-accepted.nix` — see `flake.nix`'s own comment on why that was left out of v1
-rather than built to a lower standard than the rest of this repo's evidentiary bar.
+Verified: `home/nixrecord.nix`'s option tree evaluates cleanly (`lib.evalModules` against a
+home-manager stand-in, `checks/config-rendering.nix`) and renders the expected
+`basic.ini`/`recordEncoder.json`/scene-collection JSON for a representative set of options —
+including the `fallbackCodecs` sibling-profile expansion and the audio
+pinning-versus-`followSystemDefault` distinction. Every literal id the renderer emits was checked
+against a real, installed OBS Studio. The catalogue (`lib/nixrecord.nix`, `modules/catalogue.nix`
+and its NixOS/Arch backends) resolves all three of its groups — `capture`, `control`, `edit` —
+into `archPackages`/`aurPackages`/`nixosPackages`, also checked
+(`checks/catalogue-resolution.nix`).
+
+Open, in order:
+
+1. **No video capture source exists.** `sources`/`layout` were removed entirely, not narrowed —
+   see [Sources](#sources-cameras-microphones-capture-cards) for what that took out and what a
+   consumer relying on the old `output`/`window`/`region` types needs to do instead.
+   Camera/microphone-as-video/capture-card sources are the intended replacement and are unbuilt:
+   no id for one has cleared this repo's own confirmation bar yet.
+2. **Not yet verified end to end**: an actual `home-manager switch` producing a profile+scene pair
+   that OBS opens and records from without complaint. The closest proxy — hand-authoring a scene
+   item and reloading it through the real binary — works, and
+   `experiments/obs-headless-probe.sh` reproduces it, but that is a narrower claim.
+3. **Not yet attempted**: a `nix flake check`-sandboxed real-OBS acceptance check in the style of
+   [nixscroll][nixscroll]'s `checks/config-accepted.nix` — see `flake.nix`'s own comment for why it
+   was left out rather than built below the rest of this repo's evidentiary bar.
 
 ## Related projects
 
-nixrecord is one of several small, independently-usable open-source projects sharing a common
-design system: [nixscroll](https://github.com/julian-corbet/nixscroll-corbet-ch) (declarative
-compositor config) and [nixarch](https://github.com/julian-corbet/nixarch-corbet-ch) (declarative
-Arch/AUR package convergence, which this repo's own Arch install plane depends on) cover adjacent
-ground on the same Nix-on-a-real-desktop theme.
+Part of the same independently-usable NixOS module family. The boundaries this repo's placement
+rule draws are against [nixsh][nixsh] (terminal session capture),
+[nixremote][nixremote] / [nixdesktop][nixdesktop] / [nixscroll][nixscroll] (display and
+remote-access surfaces), [nixcreative][nixcreative] (audio production and illustration/3D —
+`qtractor`, `inkscape`, `krita`, `blender`; video/audio editing itself is this repo's own `edit`
+catalogue group, not nixcreative's), [nixmedia][nixmedia] (playback and transcoding),
+[nixaudio][nixaudio] (the audio fabric a capture pins a name from), [nixusb][nixusb] (the device
+identity a camera and a control surface both need) and [nixgpu][nixgpu] (the encoder a codec
+declaration assumes). [nixarch][nixarch] is the Arch host reconciler the `systemManagerModules`
+backend publishes into.
+
+[nixsh]: https://github.com/julian-corbet/nixsh-corbet-ch
+[nixmedia]: https://github.com/julian-corbet/nixmedia-corbet-ch
+[nixcreative]: https://github.com/julian-corbet/nixcreative-corbet-ch
+[nixaudio]: https://github.com/julian-corbet/nixaudio-corbet-ch
+[nixusb]: https://github.com/julian-corbet/nixusb-corbet-ch
+[nixgpu]: https://github.com/julian-corbet/nixgpu-corbet-ch
+[nixremote]: https://github.com/julian-corbet/nixremote-corbet-ch
+[nixdesktop]: https://github.com/julian-corbet/nixdesktop-corbet-ch
+[nixscroll]: https://github.com/julian-corbet/nixscroll-corbet-ch
+[nixarch]: https://github.com/julian-corbet/nixarch-corbet-ch
 
 ## License
 

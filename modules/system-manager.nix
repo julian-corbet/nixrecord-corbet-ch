@@ -16,7 +16,7 @@
 # never needed either, exactly the failure nixarch's own pacman/AUR split exists to avoid.
 #
 # Also imports ./catalogue.nix: the plain catalogue-selection surface (`nixrecord.capture`/
-# `.control`, resolved to `archPackages`/`aurPackages`) for the approved capture set — see that
+# `.control`/`.edit`, resolved to `archPackages`/`aurPackages`) for the approved capture set — see that
 # module's own header for why it is a separate option shape from `nixrecord.install` below rather
 # than folded into it. Composing THIS module (`systemManagerModules.default`) is what a host needs
 # for either surface; there is no second module to import for the catalogue half.

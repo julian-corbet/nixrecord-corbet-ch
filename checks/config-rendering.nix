@@ -30,9 +30,6 @@ let
     fallbackCodecs = [ "hevc" "software" ];
     rateControl = "CBR";
     bitrate = 16000;
-    sources.monitor = { type = "output"; };
-    sources.cam = { type = "window"; };
-    layout.cam = { x = 1600; y = 800; width = 320; height = 180; };
   };
 
   evalWith = extraConfig: (lib.evalModules {
@@ -62,10 +59,6 @@ let
 
   scene = lib.findFirst (s: s.id == "scene") null sceneJson.sources;
   items = scene.settings.items;
-  monitorSource = lib.findFirst (s: s.name == "monitor") null sceneJson.sources;
-  camSource = lib.findFirst (s: s.name == "cam") null sceneJson.sources;
-  camItem = lib.findFirst (i: i.name == "cam") null items;
-  monitorItem = lib.findFirst (i: i.name == "monitor") null items;
 
   # Audio wiring — pinned sink, not "default".
   withAudio = evalWith { audio.sink = "alsa_output.pci-0000_00_1f.3.analog-stereo.monitor"; };
@@ -103,26 +96,11 @@ let
     "no CQP/quality key invented for a mode that doesn't use one" =
       !(recordEncoderJson ? cqp) && !(recordEncoderJson ? quality);
 
-    # ── scene collection: sources ─────────────────────────────────────────────────────────
-    "an output-type source renders the real pipewire-screen-capture-source id" =
-      monitorSource.id == "pipewire-screen-capture-source";
-    "a window-type source renders the real pipewire-window-capture-source id" =
-      camSource.id == "pipewire-window-capture-source";
-    "capture source settings are empty (no fabricated pre-selected target)" =
-      monitorSource.settings == { } && camSource.settings == { };
-
-    # ── scene collection: composite-once (the layout seam) ───────────────────────────────
-    "exactly one scene, compositing every declared source (composite once)" =
-      lib.length sceneJson.sources == 3 # 2 capture sources + 1 scene
-      && lib.length items == 2;
-    "a source with no layout entry defaults to filling the whole canvas" =
-      monitorItem.pos == { x = 0.0; y = 0.0; } && monitorItem.bounds == { x = 1920.0; y = 1080.0; };
-    "an explicit layout entry positions and sizes its item" =
-      camItem.pos == { x = 1600.0; y = 800.0; } && camItem.bounds == { x = 320.0; y = 180.0; };
-    "every item uses Stretch bounds (declared width/height authoritative)" =
-      camItem.bounds_type == 1 && monitorItem.bounds_type == 1;
-    "source uuid and the referencing item's source_uuid agree" =
-      camSource.uuid == camItem.source_uuid;
+    # ── scene collection: no video capture source exists (removed — see README's "Sources") ──
+    "no video capture source is rendered: sceneJson.sources is just the Scene itself" =
+      lib.length sceneJson.sources == 1;
+    "the Scene's own items list is empty (nothing left to place on the canvas)" =
+      items == [ ];
 
     # ── audio: pinning vs the default-sink footgun ────────────────────────────────────────
     "no audio source at all when audio.sink is unset (silence over a guess)" =
@@ -141,20 +119,12 @@ let
     # `assertions` option has). The stub above deliberately does not reimplement that
     # aggregator, so this checks the data home-manager WOULD act on, not a `tryEval` around
     # rendering — rendering itself stays lazy and never forces `assertions`.
-    "a layout entry naming an undeclared source populates a failing assertion, correctly named" =
+    "followSystemDefault without any sink/micSink populates a failing assertion, correctly named" =
       let
-        # baseProfile's own fallbackCodecs (hevc, software) means this evaluates to THREE
-        # expanded profiles (archive, archive-fallback-hevc, archive-fallback-software), all
-        # sharing the same broken `layout` — so at least one, not necessarily exactly one,
-        # failing assertion is the correct shape here.
-        badAssertions = (evalWith {
-          profiles.archive = baseProfile // {
-            layout = baseProfile.layout // { ghost = { x = 0; y = 0; width = 10; height = 10; }; };
-          };
-        }).assertions;
+        badAssertions = (evalWith { audio.followSystemDefault = true; }).assertions;
         failing = lib.filter (a: !a.assertion) badAssertions;
       in
-      lib.length failing >= 1 && lib.any (a: has a.message "profiles.archive.layout") failing;
+      lib.length failing == 1 && has (lib.head failing).message "followSystemDefault";
 
     # ── non-vacuity ────────────────────────────────────────────────────────────────────────
     "rendered basic.ini is real and non-trivial" = lib.stringLength basicIni > 50;

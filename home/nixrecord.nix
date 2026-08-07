@@ -2,9 +2,9 @@
 # (namespace: programs.nixrecord) instead of hand-editing it through OBS's Settings dialog. Two
 # files per named profile: `~/.config/obs-studio/basic/profiles/<name>/{basic.ini,
 # recordEncoder.json}` (what to encode, and how) and one matching
-# `~/.config/obs-studio/basic/scenes/<name>.json` (what to composite). See README's "One profile
-# is one canvas is one encode" for why those two are rendered as a PAIR under the same name rather
-# than as independent axes — OBS itself couples them through canvas coordinate space (a scene
+# `~/.config/obs-studio/basic/scenes/<name>.json` (what to composite). Those two are rendered as a
+# PAIR under the same name rather than as independent axes — OBS itself couples them through
+# canvas coordinate space (a scene
 # item's `pos`/`bounds` are pixels in the ACTIVE PROFILE's base canvas, not scene-collection-local),
 # so keeping them 1:1 here is what stops that coupling from becoming a footgun.
 #
@@ -39,7 +39,7 @@
 let
   cfg = config.programs.nixrecord;
 
-  inherit (lib) mkEnableOption mkOption types mkIf mkMerge filter concatStringsSep concatMapStringsSep optional optionals mapAttrsToList attrNames;
+  inherit (lib) mkOption types mkIf mkMerge filter concatStringsSep concatMapStringsSep optional optionals mapAttrsToList attrNames;
 
   # ── codec / encoder id tables ────────────────────────────────────────────────────────────
   # CORRECTED BY RUNTIME EVIDENCE, NOT BY `strings` ALONE — worth stating plainly because it
@@ -76,21 +76,6 @@ let
     # needs MP4/CDN compatibility outside this module's own default container choice.
     opus = "ffmpeg_opus";
     aac = "ffmpeg_aac";
-  };
-
-  # `pipewire-desktop-capture-source` (the unified picker OBS's own UI calls "Screen Capture
-  # (PipeWire)") is deliberately NOT used here — see README's "What Nix can and can't declare
-  # about a capture source" for why the two purpose-specific ids below are the honest choice:
-  # they at least declare INTENT (this source is a whole output / a single window) even though,
-  # like the unified source, neither can pre-select a specific monitor or window without the
-  # portal's own one-time interactive consent.
-  captureSourceId = {
-    output = "pipewire-screen-capture-source";
-    window = "pipewire-window-capture-source";
-    # "region" is not a distinct portal capture type on any compositor this module has been
-    # checked against — see the `sources.<name>.region` option below for how it's actually
-    # implemented (a crop on an output capture, not a fourth source id).
-    region = "pipewire-screen-capture-source";
   };
 
   # ── basic.ini rendering ───────────────────────────────────────────────────────────────────
@@ -187,93 +172,14 @@ let
     private_settings = { };
   };
 
-  captureSource = srcName: s: {
-    prev_ver = 0;
-    name = srcName;
-    uuid = mkUuid srcName;
-    id = captureSourceId.${s.type};
-    versioned_id = captureSourceId.${s.type};
-    # Deliberately near-empty: which monitor/window this source actually shows is negotiated
-    # live through the portal's own picker the first time it activates, and (if the portal and
-    # OBS version support it) remembered via a restore token OBS itself writes back into this
-    # same settings dict on save — a token this module cannot pre-supply because the portal
-    # mints it, not Nix. See README's "What Nix can and can't declare about a capture source".
-    settings = { };
-    mixers = 0;
-    sync = 0;
-    flags = 0;
-    volume = 1.0;
-    balance = 0.5;
-    enabled = true;
-    muted = false;
-    "push-to-mute" = false;
-    "push-to-mute-delay" = 0;
-    "push-to-talk" = false;
-    "push-to-talk-delay" = 0;
-    hotkeys = { };
-    deinterlace_mode = 0;
-    deinterlace_field_order = 0;
-    monitoring_type = 0;
-    private_settings = { };
-  };
-
-  # bounds_type = 1 ("Stretch"): inferred from OBS's own locale-string enum ORDER
-  # (None/Stretch/ScaleInner/ScaleOuter/ScaleToWidth/ScaleToHeight/MaxOnly, recovered from the
-  # `obs` binary's string table) matching the well-documented `obs_bounds_type` C enum order —
-  # a weaker confirmation tier than the item schema's own fields, which were round-tripped
-  # live. Stretch is the only bounds mode that makes a declared `layout.<name>.width/height`
-  # authoritative regardless of the source's native capture resolution, which is the point of
-  # offering width/height at all here rather than a raw scale factor.
-  sceneItem = { srcName, x, y, width, height, cropTop ? 0, cropBottom ? 0, cropLeft ? 0, cropRight ? 0 }: {
-    name = srcName;
-    source_uuid = mkUuid srcName;
-    visible = true;
-    locked = false;
-    rot = 0.0;
-    align = 5;
-    bounds_type = 1; # Stretch — see comment above
-    bounds_align = 0;
-    bounds_crop = false;
-    crop_left = cropLeft;
-    crop_top = cropTop;
-    crop_right = cropRight;
-    crop_bottom = cropBottom;
-    id = 0; # OBS renumbers on load; a placeholder here does not survive a real save, unlike
-    # every other field, which is exactly why it doesn't need to be unique across items.
-    group_item_backup = false;
-    pos = { x = x * 1.0; y = y * 1.0; };
-    scale = { x = 1.0; y = 1.0; };
-    bounds = { x = width * 1.0; y = height * 1.0; };
-    scale_filter = "disable";
-    blend_method = "default";
-    blend_type = "normal";
-    show_transition = { duration = 0; };
-    hide_transition = { duration = 0; };
-    private_settings = { };
-  };
-
   renderSceneCollection = name: p:
     let
-      sourceNames = attrNames p.sources;
-      captureSources = map (n: captureSource n p.sources.${n}) sourceNames;
-
-      items = map
-        (n:
-          let
-            s = p.sources.${n};
-            l = p.layout.${n} or { x = 0; y = 0; width = p.canvas.width; height = p.canvas.height; };
-            region = if s.type == "region" then s.region else null;
-          in
-          sceneItem {
-            srcName = n;
-            inherit (l) x y width height;
-            cropTop = if region != null then region.top else 0;
-            cropBottom = if region != null then region.bottom else 0;
-            cropLeft = if region != null then region.left else 0;
-            cropRight = if region != null then region.right else 0;
-          })
-        sourceNames;
-
+      # No video capture source exists yet — see README's "Sources: cameras, microphones,
+      # capture cards" for what was removed (the screen/window/region types this repo does not
+      # own) and why nothing has replaced them (camera/microphone-as-video/capture-card ids are
+      # unconfirmed against a real OBS the way every other id in this module is). The Scene
+      # still renders, empty, so a profile with only audio pinned (see `audio.sink`/`.micSink`
+      # below) is still a valid, loadable OBS scene collection rather than a malformed one.
       sceneSource = {
         prev_ver = 0;
         name = "Scene";
@@ -281,9 +187,9 @@ let
         id = "scene";
         versioned_id = "scene";
         settings = {
-          id_counter = lib.length items;
+          id_counter = 0;
           custom_size = false;
-          inherit items;
+          items = [ ];
         };
         mixers = 0;
         sync = 0;
@@ -324,7 +230,7 @@ let
         };
     in
     builtins.toJSON (topLevel // {
-      sources = captureSources ++ [ sceneSource ];
+      sources = [ sceneSource ];
       groups = [ ];
       scene_order = [{ name = "Scene"; }];
       current_scene = "Scene";
@@ -351,49 +257,15 @@ let
 
   fpsCommonValues = [ "10" "20" "24 NTSC" "25" "29.97" "30" "48" "50" "59.94" "60" ];
 
-  sourceType = types.submodule {
-    options = {
-      type = mkOption {
-        type = types.enum [ "output" "window" "region" ];
-        example = "output";
-        description = ''
-          What this capture source shows once its portal session is granted (see README's
-          "What Nix can and can't declare about a capture source" — this is INTENT, not a
-          pre-selected monitor or window). `output` and `window` render OBS's own dedicated
-          `pipewire-screen-capture-source`/`pipewire-window-capture-source` ids. `region` also
-          renders `pipewire-screen-capture-source` (there is no distinct portal capture type for
-          a sub-rectangle) and additionally requires `region` below, applied as a scene-item crop.
-        '';
-      };
-
-      region = mkOption {
-        type = types.nullOr (types.submodule {
-          options = {
-            top = mkOption { type = types.ints.unsigned; default = 0; description = "Pixels cropped off the top of the captured output before compositing."; };
-            bottom = mkOption { type = types.ints.unsigned; default = 0; description = "Pixels cropped off the bottom."; };
-            left = mkOption { type = types.ints.unsigned; default = 0; description = "Pixels cropped off the left."; };
-            right = mkOption { type = types.ints.unsigned; default = 0; description = "Pixels cropped off the right."; };
-          };
-        });
-        default = null;
-        description = ''
-          Required when `type = "region"`, ignored otherwise. Crop insets in the SOURCE output's
-          own native pixels (not the profile's canvas) — OBS applies `crop_*` before `bounds`
-          scaling, so these numbers stay correct regardless of what `layout.<name>` later scales
-          the cropped result to.
-        '';
-      };
-    };
-  };
-
-  layoutType = types.submodule {
-    options = {
-      x = mkOption { type = types.number; description = "Left edge, in the profile's canvas pixels (see `canvas` above)."; };
-      y = mkOption { type = types.number; description = "Top edge, in canvas pixels."; };
-      width = mkOption { type = types.number; description = "Rendered width, in canvas pixels. Stretches the source to fit regardless of its native resolution — see `sceneItem`'s comment on `bounds_type`."; };
-      height = mkOption { type = types.number; description = "Rendered height, in canvas pixels."; };
-    };
-  };
+  # NO `sourceType`/`layoutType` HERE, DELIBERATELY. This module used to render a video capture
+  # source as `output` / `window` / `region` — OBS's own `pipewire-screen-capture-source` /
+  # `pipewire-window-capture-source` — which is screen/window capture, out of this repo's scope
+  # per README's placement rule (that belongs to whatever repo owns the display surface:
+  # nixremote/nixdesktop/nixscroll). Those were the ONLY source types this module ever
+  # implemented, so removing them removes the whole mechanism, not one enum value among several.
+  # See README's "Sources: cameras, microphones, capture cards" for what a consumer relying on
+  # the old types needs to do instead, and Status item 1 for why a camera/mic/capture-card
+  # replacement isn't a drop-in: no id for one has cleared this repo's own confirmation bar yet.
 
   profileType = types.submodule {
     options = {
@@ -531,41 +403,18 @@ let
         description = "Kbps for the recorded audio track. 160 is a reasonable, commonly-used default for either codec at this default.";
       };
 
-      sources = mkOption {
-        type = types.attrsOf sourceType;
-        default = { };
-        description = ''
-          Named capture sources composited into this profile's own scene collection (same
-          name). Empty by default: a video-only or audio-only profile is valid, and a consumer
-          who wants no default sources at all should not have to override anything to get that
-          — same "render only what you set" reasoning as everywhere else in this module.
-        '';
-      };
-
-      layout = mkOption {
-        type = types.attrsOf layoutType;
-        default = { };
-        description = ''
-          Where each `sources.<name>` is placed on the canvas. A source with no entry here
-          defaults to filling the WHOLE canvas (0,0 at `canvas.width`x`canvas.height`) — the
-          right default for the single-source case, which is most of them; multi-source layouts
-          need an entry per source that should NOT cover the whole frame.
-
-          THIS is where "composite once, encode once" (see README and
-          studies/av1-vaapi-pixel-budget.md) actually becomes structural rather than just
-          advice: there is no option anywhere in this module that produces more than one scene
-          collection, more than one `RecEncoder`, or more than one recording output per profile.
-          Recording three windows means three entries here feeding ONE scene, ONE canvas, ONE
-          encode — never three independent captures.
-        '';
-      };
+      # NO `sources`/`layout` HERE — see the comment above `profileType` for why: this module has
+      # no video capture source type left to place, having removed the only ones it ever
+      # implemented (screen/window/region — out of scope) with no confirmed replacement yet. A
+      # profile today renders encode settings and, if `audio.sink`/`.micSink` are set, an
+      # audio-only scene.
     };
   };
 in
 {
-  options.programs.nixrecord = {
-    enable = mkEnableOption "generating OBS Studio profile + scene-collection config from declared recording intents (see README)";
+  imports = [ ../modules/nixrecord.nix ];
 
+  options.programs.nixrecord = {
     profiles = mkOption {
       type = types.attrsOf profileType;
       default = { };
@@ -687,12 +536,7 @@ in
           assertion = cfg.audio.sink != null || cfg.audio.micSink != null || !cfg.audio.followSystemDefault;
           message = "programs.nixrecord.audio.followSystemDefault is set but neither `sink` nor `micSink` is — there is no audio source for it to affect. Set at least one, or drop followSystemDefault.";
         }
-      ] ++ lib.concatMap
-        ({ name, profile }: [{
-          assertion = lib.all (n: profile.sources ? ${n}) (attrNames profile.layout);
-          message = "programs.nixrecord.profiles.${name}.layout names a source not present in programs.nixrecord.profiles.${name}.sources.";
-        }])
-        expandedProfiles;
+      ];
     }
   );
 }

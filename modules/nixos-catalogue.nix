@@ -1,5 +1,5 @@
 # modules/nixos-catalogue.nix — NixOS backend for the catalogue in modules/catalogue.nix, resolving
-# `nixrecord.capture`/`.control` into environment.systemPackages. The catalogue remains the single
+# `nixrecord.capture`/`.control`/`.edit` into environment.systemPackages. The catalogue remains the single
 # source of package names; Arch hands its names to nixarch's reconciler (modules/system-manager.nix)
 # while NixOS resolves the nixpkgs attributes directly in the same evaluation, here.
 #
