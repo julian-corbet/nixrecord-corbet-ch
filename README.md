@@ -18,6 +18,10 @@ host: the capture engine, the capture device's userspace tooling, the physical c
 and the editor (`kdenlive`/`shotcut`) that turns a capture into a deliverable. See
 [The catalogue](#the-catalogue).
 
+And a second plane, because a recording does not stop mattering when the encode finishes:
+**[the cluster plane](#the-cluster-plane)** — the publishing and playout services this repo owns
+(a podcast host, a run-of-show timer), declared for a Kubernetes cluster rather than for a desk.
+
 ## The placement rule
 
 Stated as a boundary rather than a list, so the next addition is decidable rather than argued:
@@ -76,6 +80,13 @@ editor with the encoder.
 The workstation's GPU is also shared with other workloads on the same box, so it is not a
 scheduling-free encode target even for the codecs it *can* encode. The laptop's is not shared with
 anything.
+
+**This is a claim about the ENCODE PIPELINE, and only about it.** Capture, composite and encode
+compose onto one machine because they need a specific encoder that lives in one machine. What
+happens to the artefact afterwards has no such tie — publishing an episode and running a live show
+are continuous services with an audience, and an audience does not wait for a laptop to be open.
+That is the second plane, and it is why one repo has both: same subject, different substrate. See
+[The cluster plane](#the-cluster-plane).
 
 ## Codec policy: capture in H.264, deliver in AV1
 
@@ -138,6 +149,7 @@ A camera in the corner of a wide shot will be a scene item, not a second recordi
 | `homeManagerModules.nixrecord` (`.default`) | home-manager | `~/.config/obs-studio/basic/{profiles,scenes}/*`, generated from `programs.nixrecord.*`. Installs nothing. |
 | `nixosModules.nixrecord` (`.default`) | NixOS | `environment.systemPackages` for the catalogue and `programs.nixrecord.package` (default `pkgs.obs-studio`). |
 | `systemManagerModules.nixrecord` (`.default`) | Arch/CachyOS | publishes into [nixarch][nixarch]'s `nixarch.packages.pacman` / `.aur` reconciler. Cannot install anything itself. |
+| `nixidyModules.nixrecord` (`.default`) | nixidy / Kubernetes | the second plane: defines the publishing and playout applications into [nixk3s][nixk3s]'s `nixk3s.apps`. Renders no Kubernetes object of its own. See [The cluster plane](#the-cluster-plane). |
 
 **No `packages` output, deliberately.** Unlike [nixscroll][nixscroll] — which packages `scroll`
 itself because scroll has no home in nixpkgs — every entry in this catalogue already exists in
@@ -145,6 +157,10 @@ nixpkgs, the Arch official repos, or the AUR. There is nothing here for a third 
 add.
 
 ## The catalogue
+
+There are two, and they are not variants of each other: this one (`lib/nixrecord.nix`) is what gets
+INSTALLED on the capture host, and `lib/applications.nix` is what RUNS in a cluster. This section
+is the first. The second is [The cluster plane](#the-cluster-plane).
 
 Same shape as [nixsh][nixsh]'s `lib/tools.nix` and [nixmedia][nixmedia]'s `lib/media.nix`: one
 entry per selectable package, each carrying its `arch` name, its `nixpkgs` attribute, and `aur`
@@ -285,12 +301,81 @@ What happens to that recording afterwards — cutting it — is this repo's own 
 (`kdenlive`/`shotcut`, see [The catalogue](#the-catalogue)). Mastering the audio itself is
 [nixcreative][nixcreative]'s `qtractor`.
 
+## The cluster plane
+
+Two applications, declared for a cluster rather than for the host with the camera on it:
+
+| Application | What it is | Why it is here |
+|---|---|---|
+| **castopod** | A podcast host: episodes go in, a feed comes out, and clients all over the internet fetch it. | The publishing end of a recording. It is what the capture side's deliverable is *for*. |
+| **ontime** | A live-event timer and rundown editor: build the order of a show, then count it down and drive the stage displays on the day. | The live end of one. A run-of-show is the same physical event this repo's placement rule already claims, seen from the control desk instead of the lens. |
+
+The placement rule reads the same one step further along: this repo owns **the real event and the
+artefact made of it**. Playing back somebody else's library is [nixmedia][nixmedia]'s, and
+re-encoding a file that already exists is too — the boundary is drawn on the EVENT, not on the
+file type, which is exactly why "it touches media" is not an argument for filing something here.
+
+**It is a translator, not a renderer.** The plane defines into the public
+[nixk3s][nixk3s] app grammar's `nixk3s.apps` and emits no Kubernetes object of its own. That
+grammar already knows how to turn "an image, ports, an exposure class, the directories it writes"
+into an Argo CD Application, a Namespace, a Deployment and a Service. What this repo adds is the
+half a grammar cannot know: what these two applications *are*.
+
+```nix
+{
+  imports = [
+    inputs.nixk3s.nixidyModules.apps      # the grammar — without it, `nixk3s.apps` does not exist
+    inputs.nixrecord.nixidyModules.nixrecord
+  ];
+
+  nixrecord.applications.podcast = {
+    app = "castopod";
+    version = "1.0.0";
+    createNamespace = true;
+    exposure = "public";
+    state.media.hostPath = "/your/media/directory";  # WHERE it mounts is the catalogue's; what
+    envFromSecrets = [ "podcast-env" ];              # backs it is only ever yours
+  };
+}
+```
+
+`lib/applications.nix` holds what is true of the software wherever anyone runs it — the port, the
+directory it writes, the environment variables it cannot start without, how patient a probe has to
+be. A declaration holds what is true of one cluster. **Neither can supply the other's half, and
+that is enforced rather than trusted:** leaving a directory the application writes unbacked is an
+eval error, and so is backing one it does not write.
+
+The two applications are opposites on nearly every axis a workload has, which is what makes two of
+them enough to keep the model honest:
+
+- **castopod migrates a schema it does not own**, on start, without being asked. So its image
+  wants a digest rather than a tag, its readiness budget is measured in minutes, and it gets **no
+  liveness probe at all** — a liveness probe there restarts the container mid-migration, which is
+  how a slow start becomes a restart loop that looks like the application's fault.
+- **ontime holds a document somebody wrote**, as readable JSON rather than an opaque database, and
+  gets both probes: readiness patient because the request most likely to be waiting is the first
+  one after an idle period, liveness impatient because the thing it exists to catch is a hang
+  during a live show.
+- **Only one of them may sleep, and the catalogue decides which.** ontime's web face idles to zero
+  happily: between shows nothing fires on a timer and nothing watches a directory. castopod cannot,
+  and not because it is large — podcast clients poll a feed on a schedule nobody here controls, so
+  "nobody is using it" is not a state it reliably reaches, and a cold start that has to boot PHP
+  and shake hands with a remote database in front of a feed fetch is a timeout rather than a wake.
+  Declaring it `scale-to-zero` is refused, not warned about.
+
+**One term is deliberately absent.** There is no option here for handing a state directory's group
+ownership to the cluster. The mechanism for doing that recursively rewrites ownership on the volume
+at *every* pod start, and both of these keep a directory a person curated from outside — a media
+library, a show's rundowns. An absent term cannot be typed by accident.
+
 ## What this repo does not own
 
 | Concern | Owner | The line |
 |---|---|---|
 | Transcoding a file you already have (`handbrake`) | [nixmedia][nixmedia] | You re-encode what you already have; nothing new entered the world. Its encode *policy* is this repo's; the tool is not. |
 | Playback (`vlc`, `mpv`) | [nixmedia][nixmedia] / [nixsh][nixsh] | Consumption. |
+| Serving somebody else's library (a media server, an archive) | [nixmedia][nixmedia] | Consumption again, on a cluster instead of a desk. [The cluster plane](#the-cluster-plane) owns the publishing end of a recording made HERE, not distribution of a collection. |
+| Rendering the Kubernetes objects a cluster application needs | [nixk3s][nixk3s] | The app grammar is its whole subject. The cluster plane declares INTO it and emits no Kubernetes object of its own. |
 | Audio routing, patchbays, mixers, per-app volume, stable device names | [nixaudio][nixaudio] | Routing is not capture. A patchbay edits the graph nixaudio declares; separating a graph from its editor helps nobody. |
 | The audio *transport* between hosts | [nixaudio][nixaudio] | A capture profile pins a node name; it never moves audio between machines. |
 | USB device identity, udev rules, stable device nodes | [nixusb][nixusb] | This repo says what a device is FOR; nixusb makes it reliably addressable. |
@@ -335,6 +420,10 @@ opens with stays a manual choice.
 }
 ```
 
+The cluster plane composes separately and shares nothing with the above but the subject — see
+[The cluster plane](#the-cluster-plane) for the declaration and `examples/all/values.nix` for a
+complete, entirely invented one.
+
 Add the system side only if you want the catalogue installed by this repo rather than some other
 way:
 
@@ -355,6 +444,12 @@ against a real installed binary, see `studies/obs-config-ground-truth.md` — or
 placeholder. No default bakes in a specific machine's sink name, device path, GPU render node or
 bitrate: `profiles` is `{}`, and `audio.sink`/`.micSink`/`encoder.device` are all `null`. A
 consumer's own hardware goes in their own config, never in this repo's defaults.
+
+The cluster catalogue holds the same kind of thing one substrate over: a port, a mount path inside
+a container, the NAMES of environment variables an application documents, a probe budget. No
+address, no node, no hostname, no namespace, no storage path and no secret's contents — every one
+of those is one deployment's fact, arrives from the consumer, and several of them are refused
+outright if the consumer does not supply them.
 
 ## No invented numbers
 
@@ -379,6 +474,21 @@ against a real, installed OBS Studio. The catalogue (`lib/nixrecord.nix`, `modul
 and its NixOS/Arch backends) resolves all three of its groups — `capture`, `control`, `edit` —
 into `archPackages`/`aurPackages`/`nixosPackages`, also checked
 (`checks/catalogue-resolution.nix`).
+
+The cluster plane is verified further than the host side is, because it can be: it renders through
+the real [nixk3s][nixk3s] grammar and the real renderer inside `nix flake check`, so both what it
+resolves (`checks/cluster-eval.nix` — every guard given a declaration that must be refused, and a
+control case that must render, so a typo in the shared base cannot make the refusals pass for the
+wrong reason) and what actually comes out (`checks/cluster-render.nix` — assertions read off the
+rendered YAML rather than off the options that produced it) are checked. Both were
+mutation-tested: moving a catalogued port, dropping the namespace anchor, neutering the state
+guard, emptying the required-environment list, removing the digest pin, flipping the idle verdict,
+inventing the liveness probe castopod deliberately does not get, weakening the hostPath type and
+dropping the declaration-side environment merge each turn one or both red.
+
+The plane declares applications; it does not deploy them. There is no evidence here that either
+application has been run from this repo's own declaration against a real cluster — the catalogue's
+facts come from a live deployment of each, which is a different claim.
 
 Open, in order:
 
@@ -406,7 +516,8 @@ catalogue group, not nixcreative's), [nixmedia][nixmedia] (playback and transcod
 [nixaudio][nixaudio] (the audio fabric a capture pins a name from), [nixusb][nixusb] (the device
 identity a camera and a control surface both need) and [nixgpu][nixgpu] (the encoder a codec
 declaration assumes). [nixarch][nixarch] is the Arch host reconciler the `systemManagerModules`
-backend publishes into.
+backend publishes into, and [nixk3s][nixk3s] is the app grammar the `nixidyModules` cluster plane
+declares into.
 
 [nixsh]: https://github.com/julian-corbet/nixsh-corbet-ch
 [nixmedia]: https://github.com/julian-corbet/nixmedia-corbet-ch
@@ -418,6 +529,7 @@ backend publishes into.
 [nixdesktop]: https://github.com/julian-corbet/nixdesktop-corbet-ch
 [nixscroll]: https://github.com/julian-corbet/nixscroll-corbet-ch
 [nixarch]: https://github.com/julian-corbet/nixarch-corbet-ch
+[nixk3s]: https://github.com/julian-corbet/nixk3s-corbet-ch
 
 ## License
 
