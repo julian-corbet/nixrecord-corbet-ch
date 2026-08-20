@@ -9,6 +9,10 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A hung job holds a runner and a concurrency slot indefinitely and never reports.
+    # Sized ~3x the observed p95 for this job (0.5m), floor 10, so a genuine slow run
+    # still passes while a wedged one fails fast instead of hanging forever.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
@@ -20,4 +24,4 @@ jobs:
       # Without it, `nix flake check` silently skips every system but the runner's own and still
       # exits 0.
       - name: nix flake check (all systems)
-        run: nix flake check --all-systems --print-build-logs
+        run: nix flake check --all-systems --keep-going --print-build-logs
