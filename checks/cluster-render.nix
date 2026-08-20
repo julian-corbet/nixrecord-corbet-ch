@@ -123,6 +123,22 @@ pkgs.runCommand "nixrecord-cluster-render"
   check "showcaller scaling label"  "scale-to-zero" "$(y '.metadata.labels."nixk3s.dev/scaling"' $showd)"
   check "showcaller wake label"     "keda"          "$(y '.metadata.labels."nixk3s.dev/wake"' $showd)"
 
+  # The only promise in this file that is read off the ARGO APPLICATION rather than off the objects
+  # it carries. Adoption changes how a live cluster is written to -- server-side apply and diff
+  # instead of a client-side reconstruction -- so the thing worth asserting is the Application's own
+  # bytes, in both directions: present where a declaration asked, and ABSENT where none did.
+  echo "== adoption is rendered on the Application, and only where a declaration asked for it =="
+  podapp="$manifests/apps/Application-example-podcast.yaml"
+  showapp="$manifests/apps/Application-example-showcaller.yaml"
+  check "podcast sync option count"  "1"                    "$(y '.spec.syncPolicy.syncOptions | length' $podapp)"
+  check "podcast server-side apply"  "ServerSideApply=true" "$(y '.spec.syncPolicy.syncOptions[0]' $podapp)"
+  check "podcast server-side diff"   "ServerSideDiff=true"  "$(y '.metadata.annotations."argocd.argoproj.io/compare-options"' $podapp)"
+  # Nothing at all on the one that CREATES its objects. An Application that quietly picked up
+  # server-side apply would change how a live object is diffed with nothing in the declaration
+  # saying so, which is the same class of surprise the term exists to prevent.
+  check "showcaller no sync options" "null" "$(y '.spec.syncPolicy.syncOptions' $showapp)"
+  check "showcaller no compare opts" "null" "$(y '.metadata.annotations."argocd.argoproj.io/compare-options"' $showapp)"
+
   echo "== exactly one workload anchors the shared namespace, and only one =="
   check "namespaces rendered" "1" "$(find -L $manifests -name 'Namespace-*.yaml' -type f | wc -l)"
   check "which namespace"     "example-media" "$(y '.metadata.name' $pod/Namespace-example-media.yaml)"

@@ -9,8 +9,9 @@
 # merely in what evaluates:
 #
 #   - a publishing service that cannot idle, takes its whole database configuration from a named
-#     Secret, is pinned by digest because it migrates a schema on start, and is judged by a patient
-#     readiness probe with no liveness probe at all;
+#     Secret, is pinned by digest because it migrates a schema on start, is judged by a patient
+#     readiness probe with no liveness probe at all, and ADOPTS objects the cluster already holds
+#     rather than creating them;
 #   - a playout service that CAN idle, holds no credential, carries a time zone the catalogue
 #     refuses to guess, sleeps behind a wake front, is judged by both probes, is hardened by the
 #     catalogue and takes the read-only root the catalogue merely makes available, and re-tunes one
@@ -40,6 +41,12 @@
     createNamespace = true;
     exposure = "public";
     slot = 10;
+
+    # Takes over objects an imaginary cluster already holds, so its Application renders with
+    # server-side apply and server-side diff. Declared on THIS one and not on the other because
+    # that is the whole shape of the term: adoption is a cluster's history, so two workloads of
+    # the same repository legitimately differ here and nowhere else.
+    adopt = true;
     state.media.hostPath = "/example/state/podcast-media";
     envFromSecrets = [ "example-podcast-env" ];
 

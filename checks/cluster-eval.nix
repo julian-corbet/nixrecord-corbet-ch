@@ -197,6 +197,16 @@ let
       in
       stated.security.readOnlyRootFilesystem == false;
 
+    # ── Adoption: a cluster's history, which no catalogue can hold a half of ──────────────────
+    # Two workloads of one repository, differing here and in nothing else that matters, is the
+    # whole argument for the term living on the declaration side: one of these clusters already
+    # holds the objects and the other does not, and the software is the same either way.
+    "taking over objects a cluster already holds is the declaration's to say, and reaches the grammar" =
+      podcast.adopt == true;
+
+    "and a workload that says nothing creates its objects rather than adopting them" =
+      showcaller.adopt == false;
+
     # ── Resources: the one term with no knowledge half at all ─────────────────────────────────
     "a share of one cluster's hardware comes from the declaration and from nowhere else" =
       podcast.resources.requests == { cpu = "250m"; memory = "512Mi"; }

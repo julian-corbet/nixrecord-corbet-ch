@@ -335,6 +335,8 @@ half a grammar cannot know: what these two applications *are*.
     exposure = "public";
     state.media.hostPath = "/your/media/directory";  # WHERE it mounts is the catalogue's; what
     envFromSecrets = [ "podcast-env" ];              # backs it is only ever yours
+    adopt = true;                                    # only if this cluster ALREADY runs it —
+                                                     # server-side apply, so the diff is real
 
     resources.requests = { cpu = "100m"; memory = "256Mi"; };  # a share of YOUR hardware, and
     resources.limits.memory = "1Gi";                           # there is no knowledge half
@@ -348,14 +350,15 @@ what it needs from the kernel. A declaration holds what is true of one cluster. 
 supply the other's half, and that is enforced rather than trusted:** leaving a directory the
 application writes unbacked is an eval error, and so is backing one it does not write.
 
-Three terms sit close enough to the line to be worth naming, because each one is cut through the
-middle rather than filed on one side:
+Four terms sit close enough to the line to be worth naming, because each one is cut through the
+middle rather than filed on one side — or, in the last two, is not cut at all:
 
 | Term | Catalogue's half | Declaration's half |
 |---|---|---|
 | **Probes** | Which probes exist, what each asks for, which port it reads — and the one that must not exist. | `probeBudget`: how many seconds a start is given, because that is a fact about a machine. It moves numbers and cannot introduce a probe. |
 | **Hardening** | What the process needs from the kernel. An application established to need nothing is hardened *wherever* it is declared; one whose needs are unestablished is left visibly alone. | `readOnlyRootFilesystem`: being the first installation to run it that way is a day somebody picks. Asking where the catalogue says the software writes outside its directory is refused. |
 | **Resources** | *Nothing.* There is no knowledge half — a request is a share of one particular node. | `resources.requests` / `.limits`, in full. Stating none is warned about, never guessed at. |
+| **Adoption** | *Nothing.* Whether the objects already exist is that cluster's history, not a fact about the software. | `adopt`: renders the Application with server-side apply and diff, for taking over objects somebody already applied. The same application is adopted on one cluster and created fresh on another. |
 
 The two applications are opposites on nearly every axis a workload has, which is what makes two of
 them enough to keep the model honest:

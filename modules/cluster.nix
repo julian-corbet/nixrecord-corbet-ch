@@ -34,7 +34,7 @@
 # writes a media library and is declared without a backing is refused rather than quietly rendered
 # onto a pod's ephemeral filesystem.
 #
-# THE SAME CUT, THREE MORE TIMES, because these are the three that look like they belong on the
+# THE SAME CUT, FOUR MORE TIMES, because these are the ones that look like they belong on the
 # wrong side until you say what they mean:
 #
 #   * PROBES. Which ones exist, what each asks for, and which one must not exist is the software --
@@ -47,6 +47,10 @@
 #   * RESOURCES. A request is a share of one particular node's hardware. There is no knowledge half
 #     at all, which is why `resources` is a declaration term with no catalogue counterpart, and why
 #     an empty one is warned about rather than filled in with a number nobody measured.
+#   * ADOPTION. Whether the objects already exist is a cluster's HISTORY -- the same application is
+#     adopted where somebody once applied it by hand and created fresh where nobody did. No
+#     knowledge half either, so `adopt` is a declaration term, and it changes the rendered
+#     Application rather than the Deployment: server-side apply and diff instead of client-side.
 #
 # ── ONE TERM IS DELIBERATELY ABSENT ────────────────────────────────────────────────────────────
 #
@@ -148,7 +152,7 @@ let
   mkApp = x:
     let inherit (x) entry w; in
     {
-      inherit (w) namespace createNamespace project exposure scaling;
+      inherit (w) namespace createNamespace project adopt exposure scaling;
       image = imageOf entry w;
       ports = portsOf entry;
       state = stateOf entry w;
@@ -424,6 +428,33 @@ let
       default = platform.project;
       defaultText = lib.literalExpression "config.nixrecord.clusterPlatform.project";
       description = "Delivery project this workload's Application belongs to.";
+    };
+
+    adopt = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Whether this workload TAKES OVER objects that already exist in the cluster rather than
+        creating them -- applied once by hand, by an addon, or by a manifest this declaration
+        replaces. The grammar renders such an Application with server-side apply and server-side
+        diff, so Argo compares against what the API server actually holds instead of against a
+        client-side reconstruction of it.
+
+        A DECLARATION'S TERM, and it is the knowledge/value split in one line: whether an object
+        already exists is that cluster's HISTORY, not a fact about the software. The same
+        application is adopted on the cluster that has been running it under a hand-written
+        manifest and created fresh on the one that never has -- identical in every other term here
+        and different in this one. So the catalogue has no half of it at all, the way `resources`
+        has none.
+
+        AND IT IS NOT COSMETIC. A rendered spec is never byte-identical to the YAML it replaces:
+        labels differ, fields this grammar sets appear, fields it does not set disappear. Argo sees
+        that diff and acts on it -- and every application catalogued here backs a directory, which
+        forces `Recreate`: the old pod stops before the new one starts, and on the publishing end
+        that can land part-way through a schema migration. Server-side apply shrinks the diff to
+        what genuinely changed; it does not make it zero. Render it, diff it against what is live,
+        and decide knowingly.
+      '';
     };
 
     slot = lib.mkOption {
