@@ -29,7 +29,7 @@
 # converge down with it.
 #
 # Every (arch, nixpkgs) pair below was verified against a REAL system, not guessed, on
-# CORBET-ELITEBOOK — the one host this repo targets (see README's "Single-host by construction"):
+# The reference laptop — the one host this repo targets (see README's "Single-host by construction"):
 # `pacman -Si <name>` (official repo) or `paru -Si <name>` (AUR) for the Arch side, and a
 # force-evaluating `nix eval --impure` (`builtins.tryEval (builtins.seq pkgs.<attr> true)`, not
 # `hasAttrByPath` alone — see nixmedia's own lib/media.nix header for the exact class of

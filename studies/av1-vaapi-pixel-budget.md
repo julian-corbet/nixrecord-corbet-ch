@@ -2,7 +2,7 @@
 
 **Status: measured, not modeled.** These numbers come from running real concurrent AV1 VAAPI
 encodes against an Intel Lunar Lake / Arc 140V integrated GPU — the class of hardware this
-repo's Arch/elitebook target actually has. They are the reason `programs.nixrecord.profiles`
+repo's Arch laptop target actually has. They are the reason `programs.nixrecord.profiles`
 composites sources into one scene per profile instead of letting a consumer spin up one OBS
 recording output per window (see README's "Composite once, encode once").
 

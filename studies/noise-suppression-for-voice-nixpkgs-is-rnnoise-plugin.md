@@ -50,7 +50,7 @@ divergence directly, the same way nixsh's `delta` entry does, so a future reader
 `nixosPackages` for a `rnnoise-plugin` line does not go looking for a bug in the resolution logic
 instead of the catalogue's own deliberate choice.
 
-**Method:** `pacman -Si` against a live CachyOS host (`CORBET-ELITEBOOK`, the one host this repo
+**Method:** `pacman -Si` against a live CachyOS host (the reference laptop, the one host this repo
 targets) for the Arch side; a force-evaluating `nix eval --impure` against the nixpkgs revision
 this repo's own `flake.lock` had pinned at the time, plus the `meta.homepage`/pacman `URL`
 cross-check, for the nixpkgs side — same method this family's other naming-divergence studies use.
