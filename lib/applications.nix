@@ -17,11 +17,14 @@
 #
 # WHAT IS KNOWLEDGE AND WHAT IS A VALUE. Everything in this file is true of the software wherever
 # anyone runs it: the port it listens on, the directory it writes, the environment variables it
-# cannot start without, how patient a probe has to be, whether anything is lost while it is not
-# running. Nothing here names an address, a node, a hostname, a namespace, a storage path or a
+# cannot start without, the SHAPE of its probes -- which ones exist, what they ask for, and which
+# one must not exist at all -- what it needs from the kernel, whether it writes anywhere but the
+# directory it declares, and whether anything is lost while it is not running. Nothing here names
+# an address, a node, a hostname, a namespace, a storage path, a share of somebody's hardware or a
 # secret's contents -- those are one deployment's facts and they arrive from the consumer. The
 # split is enforced rather than trusted: `state` here is the path INSIDE the container, and what
-# backs it can only be supplied by a declaration.
+# backs it can only be supplied by a declaration; the probe SHAPES are here and their BUDGETS can
+# be re-tuned by a declaration, because how long a start takes is a fact about a machine.
 {}:
 {
   applications = {
@@ -71,6 +74,27 @@
       # migration -- which is how a slow start becomes a restart loop that looks like the
       # application's fault and is not.
       liveness = null;
+
+      # WHAT THE PROCESS NEEDS FROM THE KERNEL, AND WHERE IT WRITES. Both halves are properties of
+      # the image rather than of a cluster, which is why they are stated here -- and both are
+      # stated as what has been ESTABLISHED rather than as what sounds prudent. A restriction
+      # nobody verified is not hardening; it is a container that fails to start, reporting a
+      # permission rather than the setting that denied it.
+      hardening = {
+        # NOT ESTABLISHED, and therefore nothing is applied. This is a PHP application behind a web
+        # server inside one image, with an entrypoint that arranges its own runtime directories on
+        # start; which of that path's steps need a capability has not been established here, and
+        # this repository does not assert a profile it has not checked. The consequence is visible
+        # rather than hidden: nothing is rendered, so the container carries no securityContext and
+        # a reader can see that the question is open.
+        privileges = "unestablished";
+
+        # IT WRITES OUTSIDE THE DIRECTORY IT DECLARES, by design and not by accident. The cache
+        # handler writes to the container's own filesystem, and that is exactly the trade that
+        # makes this one container instead of a pair (see the note). A read-only root takes it
+        # away, so asking for one is refused rather than granted.
+        rootFilesystem = "writable";
+      };
 
       # IT MAY NOT IDLE. Not because it is large -- it is not -- but because of who calls it: see
       # the note.
@@ -153,6 +177,24 @@
         path = "/";
         periodSeconds = 15;
         failureThreshold = 6;
+      };
+
+      # WHAT THE PROCESS NEEDS FROM THE KERNEL, AND WHERE IT WRITES -- the same two questions, with
+      # answers, which is the difference that decides what gets rendered.
+      hardening = {
+        # IT NEEDS NOTHING. One Node process, one port well above 1024, no setuid path, and nothing
+        # it does requires gaining a privilege it did not start with. So every capability goes and
+        # escalation is denied -- and because that is knowledge about the software rather than a
+        # preference, it applies wherever this application is declared instead of being opted into
+        # one cluster at a time.
+        privileges = "none";
+
+        # EVERYTHING IT WRITES IS THE DIRECTORY ABOVE: state, rundowns, styles, translations and
+        # uploaded assets all land under one path, and there is no second place. That makes a
+        # read-only root filesystem POSSIBLE, which is a different statement from "on". Being the
+        # first installation to run it that way is a risk somebody takes on a particular day, so
+        # this half only UNLOCKS the term; a declaration still has to ask for it.
+        rootFilesystem = "state-only";
       };
 
       # IT MAY IDLE -- with a boundary that is written down rather than assumed. See the note.

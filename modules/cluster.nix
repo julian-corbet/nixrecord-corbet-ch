@@ -34,6 +34,20 @@
 # writes a media library and is declared without a backing is refused rather than quietly rendered
 # onto a pod's ephemeral filesystem.
 #
+# THE SAME CUT, THREE MORE TIMES, because these are the three that look like they belong on the
+# wrong side until you say what they mean:
+#
+#   * PROBES. Which ones exist, what each asks for, and which one must not exist is the software --
+#     catalogue. How many seconds a start is given is the machine it starts on -- declaration, and
+#     it may move numbers only: `probeBudget` cannot bring a probe into existence.
+#   * HARDENING. What a process needs from the kernel is the software -- catalogue, and an
+#     application established to need nothing is hardened wherever it is declared rather than one
+#     cluster at a time. Whether to hold its root filesystem read-only is a day somebody picks --
+#     declaration, checked against the catalogue before it is granted.
+#   * RESOURCES. A request is a share of one particular node's hardware. There is no knowledge half
+#     at all, which is why `resources` is a declaration term with no catalogue counterpart, and why
+#     an empty one is warned about rather than filled in with a number nobody measured.
+#
 # ── ONE TERM IS DELIBERATELY ABSENT ────────────────────────────────────────────────────────────
 #
 # There is no option here for handing a state directory's group ownership to the cluster. The
@@ -54,7 +68,14 @@ let
   # A whole reference wins over a repository plus a tag, which is what pinning by digest looks
   # like. The catalogue never carries either: a version is a deployment's choice and a digest is
   # one deployment's proof of what it is running.
-  imageOf = entry: w: if w.image != null then w.image else "${entry.image}:${w.version}";
+  #
+  # The third case -- neither stated -- is REFUSED by an assertion below, and this falls back to
+  # the bare repository rather than interpolating a null so that the refusal is what the reader
+  # sees. A message about a missing version says what to do; a type error inside a string does not.
+  imageOf = entry: w:
+    if w.image != null then w.image
+    else if w.version != null then "${entry.image}:${w.version}"
+    else entry.image;
 
   portsOf = entry: lib.mapAttrs (_: number: { inherit number; }) entry.ports;
 
@@ -68,16 +89,47 @@ let
       })
       w.state;
 
+  # Only the timings a declaration actually stated. Everything it left null stays the catalogue's,
+  # which is what makes a budget a TUNING rather than a replacement: naming one number never
+  # silently resets the other three.
+  budgeted = b: lib.filterAttrs (_: v: v != null) b;
+
   # Readiness AND liveness, both from the catalogue and neither synthesized. A liveness probe is
   # the one a repository must not invent: guessed, it restarts a container that is merely starting
   # slowly, and the catalogue says `null` for exactly the application where that would happen.
-  probesOf = entry:
+  #
+  # THE SHAPE IS THE CATALOGUE'S AND THE PATIENCE IS THE DEPLOYMENT'S. Which probes exist, what
+  # each one asks for and which port it reads are properties of the software; how many seconds a
+  # start is given is a property of the machine it starts on, and the same image is slower on cold
+  # storage than on the disk somebody measured. So a budget may move the numbers and may not
+  # introduce a probe -- asking for a probe the catalogue does not declare is refused below.
+  probesOf = entry: w:
     (lib.optionalAttrs (entry.readiness != null) {
-      readiness = { port = entry.primaryPort; } // entry.readiness;
+      readiness = { port = entry.primaryPort; } // entry.readiness // budgeted w.probeBudget.readiness;
     })
     // (lib.optionalAttrs (entry.liveness != null) {
-      liveness = { port = entry.primaryPort; } // entry.liveness;
+      liveness = { port = entry.primaryPort; } // entry.liveness // budgeted w.probeBudget.liveness;
     });
+
+  # CONTAINER HARDENING, and every term in it only ever RESTRICTS -- there is no `privileged`, no
+  # capability to ADD and no per-container user, here or in the grammar underneath.
+  #
+  # The two halves come from opposite sides on purpose. What a process needs from the kernel is a
+  # property of the software, so an application the catalogue has established needs nothing is
+  # hardened WHEREVER it is declared rather than one cluster at a time; an application whose needs
+  # are unestablished is left alone, and the absence is visible in the rendered object instead of
+  # being a comment somewhere. Whether to hold the root filesystem read-only is the deployment's
+  # call even where the catalogue says it is possible, because somebody has to be the first
+  # installation to run it that way.
+  securityOf = entry: w:
+    lib.optionalAttrs (entry.hardening.privileges == "none")
+      {
+        allowPrivilegeEscalation = false;
+        capabilitiesDrop = [ "ALL" ];
+      }
+    // lib.optionalAttrs (w.readOnlyRootFilesystem != null) {
+      inherit (w) readOnlyRootFilesystem;
+    };
 
   # Whole Secrets, loaded wholesale. Nothing here can carry a secret's CONTENT, which is what makes
   # a declaration written against this module safe to publish.
@@ -103,7 +155,9 @@ let
       secrets = secretsOf w;
       env = entry.env // w.env;
       args = entry.args ++ w.args;
-      probes = probesOf entry;
+      probes = probesOf entry w;
+      security = securityOf entry w;
+      resources = { inherit (w.resources) requests limits; };
     }
     // lib.optionalAttrs (w.wake != null) { inherit (w) wake; }
     // addressingOf w;
@@ -152,6 +206,65 @@ let
           + "), and no Secret was named in `envFromSecrets`. Every one of those values is either a "
           + "credential or one installation's address, so this repository cannot supply them and will "
           + "not render a workload that starts, fails and reports it as the application's fault.";
+      })
+    workloads;
+
+  # A version and a whole reference are the only two places a tag can come from, and there is no
+  # third. This used to be enforced by `version` having no default -- which only fired when
+  # something forced it, so a declaration that overrode `image` could leave it unstated and never
+  # find out. Stated as an assertion, the rule holds whether or not anything reads the value.
+  referenceAssertions = lib.map
+    (x:
+      let inherit (x) name w; in
+      {
+        assertion = w.image != null || w.version != null;
+        message =
+          "nixrecord: application `${name}` states neither a version nor a whole image reference, "
+          + "and there is no third place to get one from. An unstated version is not a sensible "
+          + "default here -- it is `latest`, on an application that rewrites what it reads on start.";
+      })
+    workloads;
+
+  # A budget says HOW PATIENT a probe is. It cannot bring one into existence, and the refusal is
+  # sharper than it looks: for one of the two applications catalogued here the missing liveness
+  # probe IS the decision, so a declaration that budgets one is not filling a gap, it is asking for
+  # the container to be restarted part-way through a schema migration.
+  probeBudgetAssertions = lib.concatMap
+    (x:
+      let inherit (x) name w entry; in
+      lib.mapAttrsToList
+        (probe: declared: {
+          assertion = budgeted w.probeBudget.${probe} == { } || declared != null;
+          message =
+            "nixrecord: application `${name}` budgets a `${probe}` probe, and the catalogue gives "
+            + "`${w.app}` none. A budget says how patient a probe is; it cannot bring one into "
+            + "existence -- and a probe missing from this catalogue is missing on purpose. See the "
+            + "catalogue note for `${w.app}`.";
+        })
+        { readiness = entry.readiness; liveness = entry.liveness; })
+    workloads;
+
+  # Whether a read-only root is POSSIBLE is the catalogue's answer and whether to take it is the
+  # declaration's. Asking for one where the software writes outside the directories it declares is
+  # not hardening -- it is a container that fails on its first write, reporting a permission rather
+  # than the setting that denied it.
+  rootFilesystemAssertions = lib.map
+    (x:
+      let inherit (x) name w entry; in
+      {
+        assertion =
+          w.readOnlyRootFilesystem != true || entry.hardening.rootFilesystem == "state-only";
+        message =
+          "nixrecord: application `${name}` asks for a read-only root filesystem, and `${w.app}` "
+          + (if entry.hardening.rootFilesystem == "writable"
+          then
+            "writes outside the directory it declares. That is a documented property of the image "
+            + "rather than an accident, so the read-only root does not harden it -- it stops it "
+            + "starting."
+          else
+            "has not been established to write only inside it. An unverified read-only root is not "
+            + "a restriction anybody checked; it is a failure waiting for the first write.")
+          + " See the catalogue note for `${w.app}`.";
       })
     workloads;
 
@@ -217,12 +330,25 @@ let
             + "brings it back. At zero replicas that is not an idle workload, it is an unreachable one.";
         }
         {
-          when = w.image == null;
+          # The test is the DIGEST rather than "did somebody set `image`". A whole reference with no
+          # digest -- a bare repository, or a repository and a tag -- resolves to whatever the
+          # registry is serving today, and the old test called that pinned because it had been
+          # typed into the right option.
+          when = !(lib.hasInfix "@sha256:" (imageOf x.entry w));
           message =
-            "nixrecord: application `${name}` runs `${w.app}` at tag `${w.version}` rather than a whole "
-            + "reference. Both applications catalogued here rewrite what they read on start -- a schema "
-            + "in one case, an on-disk format in the other -- so a tag that moves under you is a data "
-            + "migration nobody reviewed. Pin it by digest.";
+            "nixrecord: application `${name}` runs `${imageOf x.entry w}`, a reference with no digest. "
+            + "Both applications catalogued here rewrite what they read on start -- a schema in one "
+            + "case, an on-disk format in the other -- so a reference that resolves somewhere else "
+            + "tomorrow is a data migration nobody reviewed. Pin it by digest.";
+        }
+        {
+          when = w.resources.requests == { };
+          message =
+            "nixrecord: application `${name}` is declared with no resource requests, so the scheduler "
+            + "places it as if it cost nothing. On a cluster running one thing that is true enough; on "
+            + "a busy one it is how a node ends up oversubscribed by workloads that all looked small. "
+            + "What it costs on YOUR hardware is not something this repository can know, which is why "
+            + "this is a warning and not a value.";
         }
         {
           when = w.slot != null && platform.origin == null;
@@ -233,6 +359,39 @@ let
         }
       ])
     workloads;
+
+  # The four numbers a probe is allowed to be re-tuned by, and nothing else. There is no `path`
+  # here and no `port`: what a probe ASKS FOR is the software's business, and a term that let a
+  # deployment change it would let a probe point somewhere the application does not serve while
+  # still reading like a tuning knob.
+  budgetType = lib.types.submodule {
+    options = {
+      initialDelaySeconds = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.unsigned;
+        default = null;
+        description = "Delay before the first probe. Null leaves the catalogue's.";
+      };
+      periodSeconds = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = null;
+        description = "Interval between probes. Null leaves the catalogue's.";
+      };
+      failureThreshold = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = null;
+        description = ''
+          Consecutive failures before the verdict is acted on. With `periodSeconds` this is the
+          whole budget, and it is the number worth moving on slow hardware: it decides how long a
+          start is tolerated, not how often it is looked at.
+        '';
+      };
+      timeoutSeconds = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = null;
+        description = "How long one probe may take before it counts as failed. Null leaves the catalogue's.";
+      };
+    };
+  };
 
   commonOptions = {
     enable = lib.mkOption {
@@ -376,6 +535,90 @@ let
       description = "Arguments appended to whatever the catalogue sets.";
     };
 
+    resources = {
+      requests = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        example = { cpu = "100m"; memory = "256Mi"; };
+        description = ''
+          What the scheduler must find before it will place this workload. A DEPLOYMENT'S value in
+          the strictest sense: it is a share of one particular machine, and the same application is
+          sized differently on a node that also holds an encoder than on one that does not. The
+          catalogue cannot know either number, and a number it guessed would be obeyed by a
+          scheduler as if somebody had measured it.
+
+          Leaving it empty is not free, and it is warned about rather than refused: a container with
+          no request is placed as though it cost nothing.
+        '';
+      };
+
+      limits = lib.mkOption {
+        type = lib.types.attrsOf lib.types.str;
+        default = { };
+        example = { memory = "1Gi"; };
+        description = ''
+          Ceilings -- and they are not one instrument used twice. A memory limit is a KILL
+          threshold; a cpu limit is a THROTTLE. Which one you are setting matters most on the
+          application that migrates a schema on start: a kill part-way through is exactly the
+          failure the catalogue's patient readiness budget exists to avoid, arriving by a different
+          door.
+        '';
+      };
+    };
+
+    readOnlyRootFilesystem = lib.mkOption {
+      type = lib.types.nullOr lib.types.bool;
+      default = null;
+      description = ''
+        Whether the container's own root filesystem is mounted read-only, leaving only the
+        directories the workload declares writable.
+
+        WHETHER IT IS POSSIBLE is the catalogue's answer, and asking where it is not is refused
+        rather than rendered: an application that writes outside the directory it declares does not
+        get harder to attack this way, it gets stopped. WHETHER TO TAKE IT is this deployment's,
+        which is the reason the term lives here -- somebody has to be the first installation to run
+        an application under a read-only root, and that is a day somebody picks.
+
+        Three states, all of them meant. `null` states nothing and renders nothing, which is what a
+        workload already running without the field needs; `false` says out loud that the root stays
+        writable; `true` asks for it and is checked against the catalogue.
+      '';
+    };
+
+    probeBudget = lib.mkOption {
+      default = { };
+      description = ''
+        HOW PATIENT the catalogue's probes are, on this cluster's hardware.
+
+        The catalogue owns the SHAPE -- which probes exist, what each asks for, which port it reads,
+        and the one deliberate absence -- because all of that is true of the software wherever it
+        runs. It cannot own the numbers past a point: the same image starts slower on cold storage
+        or a busy node than on the machine somebody measured, and a budget that was right there is a
+        restart loop here.
+
+        So this moves numbers and only numbers. It cannot introduce a probe, change what one asks
+        for, or point one somewhere else; every timing left unstated stays the catalogue's, and
+        budgeting a probe the application does not have is refused.
+      '';
+      type = lib.types.submodule {
+        options = {
+          readiness = lib.mkOption {
+            type = budgetType;
+            default = { };
+            description = "Re-tuned timings for the readiness probe the catalogue declares.";
+          };
+          liveness = lib.mkOption {
+            type = budgetType;
+            default = { };
+            description = ''
+              Re-tuned timings for the liveness probe the catalogue declares. Refused where it
+              declares none -- there, the absence is the decision.
+            '';
+          };
+        };
+      };
+    };
+
     image = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -449,8 +692,14 @@ in
         };
 
         version = lib.mkOption {
-          type = lib.types.str;
-          description = "Which version this workload runs, used as the image tag. Required, and defaulted nowhere.";
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            Which version this workload runs, used as the image tag. Defaulted nowhere, and null
+            only when `image` carries a whole reference instead -- which is the better answer, and
+            the reason the two are not both required. Stating neither is refused: an unstated
+            version is not a conservative default, it is `latest`.
+          '';
         };
       };
     }));
@@ -472,7 +721,8 @@ in
   config = {
     nixk3s.apps = lib.listToAttrs (map (x: lib.nameValuePair x.name (mkApp x)) workloads);
     nixidy.assertions =
-      stateAssertions ++ secretEnvAssertions ++ idleAssertions ++ anchorAssertions ++ slotAssertions;
+      stateAssertions ++ secretEnvAssertions ++ referenceAssertions ++ probeBudgetAssertions
+      ++ rootFilesystemAssertions ++ idleAssertions ++ anchorAssertions ++ slotAssertions;
     nixidy.warnings = warnings;
   };
 }

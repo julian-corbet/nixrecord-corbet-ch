@@ -330,20 +330,32 @@ half a grammar cannot know: what these two applications *are*.
 
   nixrecord.applications.podcast = {
     app = "castopod";
-    version = "1.0.0";
-    createNamespace = true;
+    version = "1.0.0";                               # or a whole `image` reference instead —
+    createNamespace = true;                          # the two are alternatives, not a pair
     exposure = "public";
     state.media.hostPath = "/your/media/directory";  # WHERE it mounts is the catalogue's; what
     envFromSecrets = [ "podcast-env" ];              # backs it is only ever yours
+
+    resources.requests = { cpu = "100m"; memory = "256Mi"; };  # a share of YOUR hardware, and
+    resources.limits.memory = "1Gi";                           # there is no knowledge half
   };
 }
 ```
 
 `lib/applications.nix` holds what is true of the software wherever anyone runs it — the port, the
-directory it writes, the environment variables it cannot start without, how patient a probe has to
-be. A declaration holds what is true of one cluster. **Neither can supply the other's half, and
-that is enforced rather than trusted:** leaving a directory the application writes unbacked is an
-eval error, and so is backing one it does not write.
+directory it writes, the environment variables it cannot start without, the shape of its probes,
+what it needs from the kernel. A declaration holds what is true of one cluster. **Neither can
+supply the other's half, and that is enforced rather than trusted:** leaving a directory the
+application writes unbacked is an eval error, and so is backing one it does not write.
+
+Three terms sit close enough to the line to be worth naming, because each one is cut through the
+middle rather than filed on one side:
+
+| Term | Catalogue's half | Declaration's half |
+|---|---|---|
+| **Probes** | Which probes exist, what each asks for, which port it reads — and the one that must not exist. | `probeBudget`: how many seconds a start is given, because that is a fact about a machine. It moves numbers and cannot introduce a probe. |
+| **Hardening** | What the process needs from the kernel. An application established to need nothing is hardened *wherever* it is declared; one whose needs are unestablished is left visibly alone. | `readOnlyRootFilesystem`: being the first installation to run it that way is a day somebody picks. Asking where the catalogue says the software writes outside its directory is refused. |
+| **Resources** | *Nothing.* There is no knowledge half — a request is a share of one particular node. | `resources.requests` / `.limits`, in full. Stating none is warned about, never guessed at. |
 
 The two applications are opposites on nearly every axis a workload has, which is what makes two of
 them enough to keep the model honest:
@@ -362,6 +374,13 @@ them enough to keep the model honest:
   "nobody is using it" is not a state it reliably reaches, and a cold start that has to boot PHP
   and shake hands with a remote database in front of a feed fetch is a timeout rather than a wake.
   Declaring it `scale-to-zero` is refused, not warned about.
+- **Only one of them is hardened, and again the catalogue decides.** ontime is one Node process on
+  one high port that never needs a privilege it did not start with, so every capability is dropped
+  and escalation denied *wherever it is declared* — that is knowledge, not a preference somebody
+  opts into per cluster. castopod's needs are **unestablished**: it is a PHP application behind a
+  web server in one image, with an entrypoint that arranges its own runtime directories, and this
+  repo does not assert a profile it has not checked. So nothing is rendered, and the open question
+  is legible in the object instead of living in a comment.
 
 **One term is deliberately absent.** There is no option here for handing a state directory's group
 ownership to the cluster. The mechanism for doing that recursively rewrites ownership on the volume
@@ -452,6 +471,12 @@ of those is one deployment's fact, arrives from the consumer, and several of the
 outright if the consumer does not supply them.
 
 ## No invented numbers
+
+The cluster plane draws the same line: `resources.requests` has no default and no catalogue
+counterpart, because a share of a node is a measurement of somebody's hardware rather than a fact
+about the software. Declaring none is warned about — a container with no request is scheduled as
+if it cost nothing — and never quietly filled in, since a guessed number is obeyed by a scheduler
+exactly as if it had been measured.
 
 `bitrate` has no default — the right value depends on resolution, codec and content in a way no
 single number survives across every profile a consumer might declare (that option's docstring

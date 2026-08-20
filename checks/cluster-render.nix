@@ -71,6 +71,31 @@ pkgs.runCommand "nixrecord-cluster-render"
   check "showcaller liveness period"   "15"   "$(y '.spec.template.spec.containers[0].livenessProbe.periodSeconds' $showd)"
   check "showcaller liveness failures" "6"    "$(y '.spec.template.spec.containers[0].livenessProbe.failureThreshold' $showd)"
 
+  echo "== the resource block is a declaration's, and absent where no declaration made one =="
+  check "podcast cpu request"    "250m"  "$(y '.spec.template.spec.containers[0].resources.requests.cpu' $podd)"
+  check "podcast memory request" "512Mi" "$(y '.spec.template.spec.containers[0].resources.requests.memory' $podd)"
+  check "podcast memory limit"   "2Gi"   "$(y '.spec.template.spec.containers[0].resources.limits.memory' $podd)"
+  # Absent rather than empty. A rendered `resources: {}` is a diff against a live object that does
+  # not carry the key, which on an adopted workload is a rollout for the sake of punctuation.
+  check "showcaller has no resources at all" "null" "$(y '.spec.template.spec.containers[0].resources' $showd)"
+
+  echo "== hardening comes from the catalogue, and its absence is as deliberate as its presence =="
+  check "showcaller escalation denied"  "false" "$(y '.spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation' $showd)"
+  check "showcaller drops everything"   "ALL"   "$(y '.spec.template.spec.containers[0].securityContext.capabilities.drop[0]' $showd)"
+  check "showcaller drops nothing else" "1"     "$(y '.spec.template.spec.containers[0].securityContext.capabilities.drop | length' $showd)"
+  # Offered by the catalogue, taken by the declaration — the render cannot tell the two apart, so
+  # the split is asserted in the eval check and only its RESULT is asserted here.
+  check "showcaller read-only root"     "true"  "$(y '.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem' $showd)"
+  # NOTHING on the one whose needs are unestablished. A securityContext this repository invented
+  # would be a restriction nobody checked, and the honest rendering of an open question is silence.
+  check "podcast has no securityContext" "null" "$(y '.spec.template.spec.containers[0].securityContext' $podd)"
+
+  echo "== a probe budget moves the number it names and nothing else about the probe =="
+  check "showcaller readiness failures (budgeted)" "36"   "$(y '.spec.template.spec.containers[0].readinessProbe.failureThreshold' $showd)"
+  check "showcaller readiness path (catalogue)"    "/"    "$(y '.spec.template.spec.containers[0].readinessProbe.httpGet.path' $showd)"
+  check "showcaller readiness port (catalogue)"    "4001" "$(y '.spec.template.spec.containers[0].readinessProbe.httpGet.port' $showd)"
+  check "showcaller liveness failures (untouched)" "6"    "$(y '.spec.template.spec.containers[0].livenessProbe.failureThreshold' $showd)"
+
   echo "== a Secret is named into the container and its contents are nowhere in this tree =="
   check "podcast envFrom"      "example-podcast-env" "$(y '.spec.template.spec.containers[0].envFrom[0].secretRef.name' $podd)"
   check "showcaller envFrom"   "null"                "$(y '.spec.template.spec.containers[0].envFrom' $showd)"

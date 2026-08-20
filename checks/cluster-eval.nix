@@ -7,11 +7,15 @@
 # and MUST render -- without it, a typo in the shared base would make every other case "pass" for
 # the wrong reason.
 #
-# TWO OF THE REFUSALS ARE NOT GUARDS AT ALL. Naming an application the catalogue does not hold, and
-# leaving out the version, fail as a type error and a missing required option -- not as assertions.
-# That is the stronger kind: a boundary nobody has to remember, because it is unwritable rather than
-# refused. `tryEval` cannot tell those apart from a guard, so the ones that ARE guards additionally
-# have their message asserted by content.
+# ONE OF THE REFUSALS IS NOT A GUARD AT ALL. Naming an application the catalogue does not hold
+# fails as a TYPE ERROR -- the stronger kind of boundary, because it is unwritable rather than
+# refused, and nobody has to remember it. `tryEval` cannot tell that apart from a guard, so
+# everything that IS a guard additionally has its message asserted by content.
+#
+# THE VERSION USED TO BE A SECOND ONE, and it was the weaker kind of unwritable: a required option
+# is only required when something forces the value, and a declaration that stated a whole `image`
+# reference forced nothing, so it could leave the version unstated forever and never hear about it.
+# The rule is an assertion now, and the two are honest alternatives rather than a required pair.
 { pkgs, lib, nixidy, appsModule, clusterModule, values }:
 
 let
@@ -47,6 +51,10 @@ let
 
   goodCfg = (mkEnv base).config;
   podcast = goodCfg.nixk3s.apps.example-podcast;
+
+  # The same app under a MODIFIED surface, for the properties that have to compare one declaration
+  # against another rather than read the example's own.
+  podcastIn = v: (mkEnv v).config.nixk3s.apps.example-podcast;
   showcaller = goodCfg.nixk3s.apps.example-showcaller;
 
   with' = f: lib.recursiveUpdate base f;
@@ -112,14 +120,21 @@ let
     "an application the catalogue does not hold is not a value this option has" =
       !renders (with' { nixrecord.applications.example-podcast.app = "nonesuch"; });
 
-    "a workload with no version is refused, because a floating tag is not a default anyone can pick" =
-      !renders {
-        nixidy.target.repository = "https://example.com/x.git";
-        nixidy.target.branch = "main";
-        nixrecord.applications.x = { app = "ontime"; };
-      };
 
     # ── The guards, each with its message asserted ────────────────────────────────────────────
+    "a workload with neither a version nor a whole reference is refused" =
+      failsWith "states neither a version nor a whole image reference"
+        {
+          nixidy.target.repository = "https://example.com/x.git";
+          nixidy.target.branch = "main";
+          nixrecord.applications.x = { app = "ontime"; };
+        };
+
+    # The other side of the same rule: a whole reference is enough on its own, and the example
+    # states no version for the workload that carries one.
+    "and a whole reference alone is enough -- the two are alternatives, not a pair" =
+      goodCfg.nixrecord.applications.example-podcast.version == null && renders base;
+
     "backing a directory the application does not write is refused" =
       failsWith "must back every directory it writes"
         (with' { nixrecord.applications.example-podcast.state.data.hostPath = "/example/nope"; });
@@ -151,7 +166,77 @@ let
       failsWith "is claimed by 2 applications"
         (with' { nixrecord.applications.example-showcaller.slot = 10; });
 
+    # ── Hardening: what the kernel is asked for, and who gets to ask ──────────────────────────
+    # The catalogue establishes what a process NEEDS, so the application it has cleared is hardened
+    # wherever it is declared rather than one cluster at a time. The other is left alone, visibly:
+    # nothing is rendered, so the open question is legible in the object rather than in a comment.
+    "the application the catalogue has cleared is hardened without anyone asking" =
+      showcaller.security.allowPrivilegeEscalation == false
+      && showcaller.security.capabilitiesDrop == [ "ALL" ];
+
+    "and the one whose needs are unestablished is left entirely alone" =
+      podcast.security.allowPrivilegeEscalation == null
+      && podcast.security.capabilitiesDrop == [ ]
+      && podcast.security.readOnlyRootFilesystem == null;
+
+    "a read-only root is offered by the catalogue and TAKEN by the declaration" =
+      showcaller.security.readOnlyRootFilesystem == true;
+
+    "asking for one where the application writes outside its directory is refused" =
+      failsWith "asks for a read-only root filesystem"
+        (with' { nixrecord.applications.example-podcast.readOnlyRootFilesystem = true; });
+
+    # Three states, and the middle one is not the same as saying nothing: a workload whose live
+    # container carries `false` needs the field rendered, and one that carries nothing needs it
+    # absent. A boolean with two states could not say both.
+    "and stating it false renders the field rather than omitting it" =
+      let
+        stated = podcastIn (with' {
+          nixrecord.applications.example-podcast.readOnlyRootFilesystem = false;
+        });
+      in
+      stated.security.readOnlyRootFilesystem == false;
+
+    # ── Resources: the one term with no knowledge half at all ─────────────────────────────────
+    "a share of one cluster's hardware comes from the declaration and from nowhere else" =
+      podcast.resources.requests == { cpu = "250m"; memory = "512Mi"; }
+      && podcast.resources.limits == { memory = "2Gi"; };
+
+    "and the workload that states none is given none rather than a number nobody measured" =
+      showcaller.resources.requests == { } && showcaller.resources.limits == { };
+
+    # ── Probe budgets: the numbers move, the shape does not ───────────────────────────────────
+    "a budget moves the number it names" =
+      showcaller.probes.readiness.failureThreshold == 36;
+
+    "and leaves every other part of the catalogue's probe exactly as it was" =
+      showcaller.probes.readiness.periodSeconds == 5
+      && showcaller.probes.readiness.path == "/"
+      && showcaller.probes.readiness.port == "http"
+      && showcaller.probes.liveness.periodSeconds == 15
+      && showcaller.probes.liveness.failureThreshold == 6;
+
+    "the un-budgeted workload keeps the catalogue's numbers untouched" =
+      podcast.probes.readiness.failureThreshold == 18
+      && podcast.probes.readiness.initialDelaySeconds == 20;
+
+    # The sharpest of the new refusals. On this application the missing liveness probe IS the
+    # decision -- budgeting one is not filling a gap, it is asking for the container to be
+    # restarted part-way through a schema migration.
+    "budgeting a probe the catalogue deliberately withholds is refused" =
+      failsWith "cannot bring one into existence"
+        (with' { nixrecord.applications.example-podcast.probeBudget.liveness.periodSeconds = 10; });
+
     # ── The warnings that are not refusals ────────────────────────────────────────────────────
+    # A workload the scheduler places as if it were free is a real mistake and still not an eval
+    # error: what it costs is a measurement of somebody's hardware, and a repository that refused
+    # the omission would be demanding a number it cannot check.
+    "a workload with no resource requests warns rather than being filled in" =
+      warnsWith "places it as if it cost nothing" base
+      && !(lib.any
+        (w: w.when && lib.hasInfix "example-podcast" w.message && lib.hasInfix "as if it cost nothing" w.message)
+        goodCfg.nixidy.warnings);
+
     # Sleeping with nothing to wake it is a real mistake and still not an eval error: which front a
     # cluster runs is its own business, and a repository that refused the combination would be
     # legislating routing it cannot see.

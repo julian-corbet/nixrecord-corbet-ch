@@ -12,7 +12,9 @@
 #     Secret, is pinned by digest because it migrates a schema on start, and is judged by a patient
 #     readiness probe with no liveness probe at all;
 #   - a playout service that CAN idle, holds no credential, carries a time zone the catalogue
-#     refuses to guess, sleeps behind a wake front, and is judged by both probes.
+#     refuses to guess, sleeps behind a wake front, is judged by both probes, is hardened by the
+#     catalogue and takes the read-only root the catalogue merely makes available, and re-tunes one
+#     probe timing for slower hardware while leaving the rest of the shape alone.
 #
 # Both write a directory, so both render `Recreate` — which is the one thing they agree on, and the
 # reason it is asserted on each of them rather than on one.
@@ -32,13 +34,23 @@
   # refuse it if it were asked to.
   nixrecord.applications.example-podcast = {
     app = "castopod";
-    version = "0.0.0";
+    # No `version`: a whole reference is stated, so there is no tag for one to become. The two are
+    # alternatives rather than a pair, and stating neither is refused.
     image = "registry.example.com/example-org/example-podcast:0.0.0@sha256:0000000000000000000000000000000000000000000000000000000000000000";
     createNamespace = true;
     exposure = "public";
     slot = 10;
     state.media.hostPath = "/example/state/podcast-media";
     envFromSecrets = [ "example-podcast-env" ];
+
+    # A share of one imaginary cluster's hardware. Invented like everything else here — the point
+    # is that the numbers come from a declaration at all, because there is no version of them that
+    # is true of the software rather than of a machine.
+    resources.requests = {
+      cpu = "250m";
+      memory = "512Mi";
+    };
+    resources.limits.memory = "2Gi";
   };
 
   # Joins the namespace above rather than anchoring a second one. Sleeps, and names the front that
@@ -57,5 +69,19 @@
     # Which clock a show counts against is a property of the show, so the catalogue does not guess
     # one and this is where it arrives.
     env.TZ = "UTC";
+
+    # The catalogue has established that this one writes nowhere but the directory it declares, so
+    # the term is available; taking it is still this declaration's call, and here it is taken.
+    readOnlyRootFilesystem = true;
+
+    # A slower machine than the one the catalogue's budget was measured on: three minutes of
+    # patience instead of two. The SHAPE is untouched — same path, same port, same five-second
+    # interval — which is what a budget is allowed to be. The same three lines aimed at `liveness`
+    # on the podcast would be refused, because that probe's absence is a decision.
+    probeBudget.readiness.failureThreshold = 36;
+
+    # NO `resources`, deliberately: one of the two carries them and one does not, so the warning
+    # about a workload the scheduler places as if it were free stays exercised rather than
+    # theoretical.
   };
 }
