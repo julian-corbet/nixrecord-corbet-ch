@@ -96,7 +96,17 @@
       # `nixk3s.apps` and emits no Kubernetes object of its own. Compose it alongside that grammar
       # (`nixk3s.nixidyModules.apps`); on its own it fails with "the option `nixk3s.apps' does not
       # exist", which is the correct failure rather than a silent one.
-      nixidyModules.nixrecord = ./modules/cluster.nix;
+      # BUILT FROM THE GRAMMAR'S CONSUMER FACTORY. The 759-line translator this replaces held the
+      # same addressing, image, port, state, probe and secret helpers a dozen sibling repositories
+      # each kept a copy of; what was actually nixrecord's is entirely in lib/applications.nix.
+      #
+      # One rule of this repository's own went the other way and is now everybody's: a version and
+      # a whole image reference are ALTERNATIVES, not a pair, so a declaration pinning a digest no
+      # longer has to carry a version that decides nothing.
+      nixidyModules.nixrecord = nixk3s.lib.mkConsumerModule {
+        namespace = "nixrecord";
+        catalogue = self.lib.applications;
+      };
       nixidyModules.default = self.nixidyModules.nixrecord;
 
       # The cluster catalogue, exposed so a consumer can inspect or validate it without re-reading

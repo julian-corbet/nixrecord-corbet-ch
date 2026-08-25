@@ -83,9 +83,12 @@ let
       && podcast.state.media.hostPath == "/example/state/podcast-media"
       && showcaller.state.data.mountPath == "/data";
 
-    "a Secret is named and never carried" =
+    # NAMED KEYS rather than a wholesale envFrom: every variable this software reads is already
+    # known by name, so a key added to the Secret later has no business reaching the process.
+    "a Secret is named, never carried, and reaches the process key by key" =
       podcast.secrets ? example-podcast-env
-      && podcast.secrets.example-podcast-env.envFrom;
+      && podcast.secrets.example-podcast-env.env ? CP_DATABASE_PASSWORD
+      && podcast.secrets.example-podcast-env.env.CP_DATABASE_PASSWORD == "CP_DATABASE_PASSWORD";
 
     "an application that needs no credential is given none" =
       showcaller.secrets == { };
@@ -123,12 +126,8 @@ let
 
     # ── The guards, each with its message asserted ────────────────────────────────────────────
     "a workload with neither a version nor a whole reference is refused" =
-      failsWith "states neither a version nor a whole image reference"
-        {
-          nixidy.target.repository = "https://example.com/x.git";
-          nixidy.target.branch = "main";
-          nixrecord.applications.x = { app = "ontime"; };
-        };
+      failsWith "neither which version it runs"
+        (with' { nixrecord.applications.x = { app = "ontime"; }; });
 
     # The other side of the same rule: a whole reference is enough on its own, and the example
     # states no version for the workload that carries one.
@@ -144,15 +143,15 @@ let
         (lib.recursiveUpdate base { nixrecord.applications.example-showcaller.state = lib.mkForce { }; });
 
     "a directory backed by both a claim and a node path is refused" =
-      failsWith "EITHER an existing claim OR a node path"
+      failsWith "EXACTLY ONE of a claim"
         (with' { nixrecord.applications.example-podcast.state.media.claim = "example-claim"; });
 
     "an application that cannot start without credentials is refused without a Secret" =
-      failsWith "cannot start without 6 environment variables"
-        (with' { nixrecord.applications.example-podcast.envFromSecrets = [ ]; });
+      failsWith "names no Secret to deliver"
+        (with' { nixrecord.applications.example-podcast.credentials.secret = lib.mkForce null; });
 
     "an application the catalogue says may not idle is refused scale-to-zero" =
-      failsWith "may not idle"
+      failsWith "unsafe to idle"
         (with' { nixrecord.applications.example-podcast.scaling = "scale-to-zero"; });
 
     "and the one that MAY idle is not refused it -- the guard reads the catalogue, not the class" =
@@ -163,7 +162,7 @@ let
         (with' { nixrecord.applications.example-showcaller.createNamespace = true; });
 
     "two workloads on one slot is refused" =
-      failsWith "is claimed by 2 applications"
+      failsWith "is claimed by 2 workloads"
         (with' { nixrecord.applications.example-showcaller.slot = 10; });
 
     # ── Hardening: what the kernel is asked for, and who gets to ask ──────────────────────────
@@ -179,23 +178,12 @@ let
       && podcast.security.capabilitiesDrop == [ ]
       && podcast.security.readOnlyRootFilesystem == null;
 
-    "a read-only root is offered by the catalogue and TAKEN by the declaration" =
-      showcaller.security.readOnlyRootFilesystem == true;
-
-    "asking for one where the application writes outside its directory is refused" =
-      failsWith "asks for a read-only root filesystem"
-        (with' { nixrecord.applications.example-podcast.readOnlyRootFilesystem = true; });
-
-    # Three states, and the middle one is not the same as saying nothing: a workload whose live
-    # container carries `false` needs the field rendered, and one that carries nothing needs it
-    # absent. A boolean with two states could not say both.
-    "and stating it false renders the field rather than omitting it" =
-      let
-        stated = podcastIn (with' {
-          nixrecord.applications.example-podcast.readOnlyRootFilesystem = false;
-        });
-      in
-      stated.security.readOnlyRootFilesystem == false;
+    # The catalogue's `writable` renders NOTHING rather than an explicit false: false is already
+    # the platform's default, so writing it out says nothing about the software and everything
+    # about what one live container happens to carry -- which is a cluster's history, and belongs
+    # in a typed merge where somebody types it on purpose and a reader can count it.
+    "the one catalogued as needing to write renders no field at all" =
+      podcast.security.readOnlyRootFilesystem == null;
 
     # ── Adoption: a cluster's history, which no catalogue can hold a half of ──────────────────
     # Two workloads of one repository, differing here and in nothing else that matters, is the
@@ -234,8 +222,8 @@ let
     # decision -- budgeting one is not filling a gap, it is asking for the container to be
     # restarted part-way through a schema migration.
     "budgeting a probe the catalogue deliberately withholds is refused" =
-      failsWith "cannot bring one into existence"
-        (with' { nixrecord.applications.example-podcast.probeBudget.liveness.periodSeconds = 10; });
+      failsWith "does not warrant"
+        (with' { nixrecord.applications.example-podcast.probes.liveness.periodSeconds = 10; });
 
     # ── The warnings that are not refusals ────────────────────────────────────────────────────
     # A workload the scheduler places as if it were free is a real mistake and still not an eval
@@ -257,11 +245,18 @@ let
     # A moving tag on an application that rewrites what it reads is the same class of mistake, and
     # gets the same treatment: which version a deployment runs is its call, and it should hear that
     # this one is a data migration.
+    # THE GRAMMAR'S WARNING, read where the grammar actually puts it -- on the rendered
+    # Application rather than in the environment's own list. This repository used to emit a second
+    # one of its own saying the same thing; the translator that did is gone, and duplicating a
+    # warning the layer underneath already makes would only teach people to skim them.
     "an unpinned reference warns, and the digest-pinned one does not" =
-      warnsWith "Pin it by digest" base
-      && !(lib.any
-        (w: w.when && lib.hasInfix "example-podcast" w.message && lib.hasInfix "Pin it by digest" w.message)
-        goodCfg.nixidy.warnings);
+      let
+        pinWarn = n:
+          lib.any
+            (w: w.when && lib.hasInfix "unpinned image" w.message)
+            (goodCfg.applications.${n}.warnings or [ ]);
+      in
+      pinWarn "example-showcaller" && !(pinWarn "example-podcast");
   };
 
   failed = lib.filter (n: !results.${n}) (lib.attrNames results);

@@ -96,8 +96,16 @@ pkgs.runCommand "nixrecord-cluster-render"
   check "showcaller readiness port (catalogue)"    "4001" "$(y '.spec.template.spec.containers[0].readinessProbe.httpGet.port' $showd)"
   check "showcaller liveness failures (untouched)" "6"    "$(y '.spec.template.spec.containers[0].livenessProbe.failureThreshold' $showd)"
 
-  echo "== a Secret is named into the container and its contents are nowhere in this tree =="
-  check "podcast envFrom"      "example-podcast-env" "$(y '.spec.template.spec.containers[0].envFrom[0].secretRef.name' $podd)"
+  echo "== a Secret is named into the container KEY BY KEY, and its contents are nowhere here =="
+  # Named keys rather than a wholesale envFrom: every variable this software reads is already known
+  # by name, so a key added to the Secret later cannot reach the process unannounced.
+  check "podcast credential secret" "example-podcast-env" \
+    "$(y '.spec.template.spec.containers[0].env[] | select(.name=="CP_DATABASE_PASSWORD") | .valueFrom.secretKeyRef.name' $podd)"
+  check "podcast credential key"    "CP_DATABASE_PASSWORD" \
+    "$(y '.spec.template.spec.containers[0].env[] | select(.name=="CP_DATABASE_PASSWORD") | .valueFrom.secretKeyRef.key' $podd)"
+  check "podcast carries no inline credential value" "null" \
+    "$(y '.spec.template.spec.containers[0].env[] | select(.name=="CP_DATABASE_PASSWORD") | .value' $podd)"
+  check "nothing wholesale"    "null"                "$(y '.spec.template.spec.containers[0].envFrom' $podd)"
   check "showcaller envFrom"   "null"                "$(y '.spec.template.spec.containers[0].envFrom' $showd)"
   # `-L` is load-bearing throughout: the rendered tree is SYMLINKS into the store, so a plain
   # `-type f` matches nothing and returns a confident zero. A count that can only ever be zero is

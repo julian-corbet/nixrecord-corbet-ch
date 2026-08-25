@@ -48,16 +48,18 @@
     # the same repository legitimately differ here and nowhere else.
     adopt = true;
     state.media.hostPath = "/example/state/podcast-media";
-    envFromSecrets = [ "example-podcast-env" ];
+    credentials.secret = "example-podcast-env";
 
     # A share of one imaginary cluster's hardware. Invented like everything else here — the point
     # is that the numbers come from a declaration at all, because there is no version of them that
     # is true of the software rather than of a machine.
-    resources.requests = {
-      cpu = "250m";
-      memory = "512Mi";
+    # Four named scalars rather than a free-form map, which is what stops a device request --
+    # a catalogue fact about the software -- being smuggled in through a deployment.
+    resources = {
+      cpuRequest = "250m";
+      memoryRequest = "512Mi";
+      memoryLimit = "2Gi";
     };
-    resources.limits.memory = "2Gi";
   };
 
   # Joins the namespace above rather than anchoring a second one. Sleeps, and names the front that
@@ -79,13 +81,12 @@
 
     # The catalogue has established that this one writes nowhere but the directory it declares, so
     # the term is available; taking it is still this declaration's call, and here it is taken.
-    readOnlyRootFilesystem = true;
 
     # A slower machine than the one the catalogue's budget was measured on: three minutes of
     # patience instead of two. The SHAPE is untouched — same path, same port, same five-second
     # interval — which is what a budget is allowed to be. The same three lines aimed at `liveness`
     # on the podcast would be refused, because that probe's absence is a decision.
-    probeBudget.readiness.failureThreshold = 36;
+    probes.readiness.failureThreshold = 36;
 
     # NO `resources`, deliberately: one of the two carries them and one does not, so the warning
     # about a workload the scheduler places as if it were free stays exercised rather than

@@ -48,7 +48,7 @@
       # documented variables, so they are knowledge; every one of their VALUES is either a
       # credential or one installation's address, so none of them can be set here. The module
       # refuses a declaration that does not hand it a Secret carrying them.
-      secretEnv = [
+      credentials = [
         "CP_DATABASE_HOSTNAME"
         "CP_DATABASE_NAME"
         "CP_DATABASE_USERNAME"
@@ -87,7 +87,8 @@
         # this repository does not assert a profile it has not checked. The consequence is visible
         # rather than hidden: nothing is rendered, so the container carries no securityContext and
         # a reader can see that the question is open.
-        privileges = "unestablished";
+        capabilities = "unestablished";
+        privilegeEscalation = "unestablished";
 
         # IT WRITES OUTSIDE THE DIRECTORY IT DECLARES, by design and not by accident. The cache
         # handler writes to the container's own filesystem, and that is exactly the trade that
@@ -98,7 +99,7 @@
 
       # IT MAY NOT IDLE. Not because it is large -- it is not -- but because of who calls it: see
       # the note.
-      idle = "unsafe";
+      idleSafe = false;
 
       note = ''
         A podcast host: the publishing end of a recording. Episodes are uploaded, a feed is
@@ -146,7 +147,7 @@
 
       # Nothing. It has no database, no external service and no credential of its own, so there is
       # nothing a Secret would have to carry.
-      secretEnv = [ ];
+      credentials = [ ];
 
       # Where it writes, said in the software's own terms, and therefore knowledge rather than a
       # value: the mount path above is the same fact, and the two would be free to disagree if one
@@ -187,18 +188,19 @@
         # escalation is denied -- and because that is knowledge about the software rather than a
         # preference, it applies wherever this application is declared instead of being opted into
         # one cluster at a time.
-        privileges = "none";
+        capabilities = "none";
+        privilegeEscalation = "never";
 
         # EVERYTHING IT WRITES IS THE DIRECTORY ABOVE: state, rundowns, styles, translations and
         # uploaded assets all land under one path, and there is no second place. That makes a
         # read-only root filesystem POSSIBLE, which is a different statement from "on". Being the
         # first installation to run it that way is a risk somebody takes on a particular day, so
         # this half only UNLOCKS the term; a declaration still has to ask for it.
-        rootFilesystem = "state-only";
+        rootFilesystem = "read-only";
       };
 
       # IT MAY IDLE -- with a boundary that is written down rather than assumed. See the note.
-      idle = "safe";
+      idleSafe = true;
 
       note = ''
         A live-event timer and rundown editor: the run-of-show side of production. Somebody builds
